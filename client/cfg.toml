@@ -1,0 +1,6 @@
+server-host = "localhost"
+server-port = 8910
+
+[[forwards]]
+local-port = 3000
+remote-port = 9001

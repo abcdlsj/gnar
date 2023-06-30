@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>gpipe server admin</title>
+    <link rel="stylesheet" type="text/css" href="/static/style.css" />
+    <link rel="shortcut icon" href="/static/favicon.ico" />
+</head>
+
+<body>
+    <h1>Active Forwards</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>From</th>
+                <th>To</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .forwards}}
+            <tr>
+                <td>{{.From}}</td>
+                <td>{{.To}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+
+    <h1>Traffic Monitor</h1>
+    <div id="traffic">
+        <div id="traffic-in">Up: {{.traffic.upbw}}</div>
+        <div id="traffic-out">Down: {{.traffic.dnbw}}</div>
+        <div id="traffic-total">Traffic: {{.traffic.total}}</div>
+    </div>
+</body>
+
+</html>

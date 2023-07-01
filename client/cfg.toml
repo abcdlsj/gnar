@@ -1,4 +1,4 @@
-server-host = "localhost"
+server-host = "your server ip"
 server-port = 8910
 
 [[forwards]]

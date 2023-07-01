@@ -22,6 +22,8 @@ func Command() *cobra.Command {
 	}
 	cmd.PersistentFlags().IntVarP(&flagCfg.Port, "port", "p", 8910, "server port")
 	cmd.PersistentFlags().IntVarP(&flagCfg.AdminPort, "admin-port", "a", 0, "admin server port")
+	cmd.PersistentFlags().BoolVarP(&flagCfg.domainTunnel, "domain-tunnel", "d", false, "enable domain tunnel")
+	cmd.PersistentFlags().StringVarP(&flagCfg.domain, "domain", "D", "", "domain name")
 	cmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 
 	return cmd

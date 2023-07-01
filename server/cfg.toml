@@ -1,2 +1,4 @@
 port = 8910
 admin-port = 8911
+domain-tunnel = true
+domain = "example.com"

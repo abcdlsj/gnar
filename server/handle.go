@@ -14,8 +14,10 @@ import (
 )
 
 type Config struct {
-	Port      int `toml:"port"`
-	AdminPort int `toml:"admin-port"` // zero means disable admin server
+	Port         int    `toml:"port"`
+	AdminPort    int    `toml:"admin-port"`    // zero means disable admin server
+	domainTunnel bool   `toml:"domain-tunnel"` // enable domain tunnel
+	domain       string `toml:"domain"`        // domain name
 }
 
 type Server struct {
@@ -28,10 +30,10 @@ type Server struct {
 }
 
 type Forward struct {
-	From string
-	To   string
-
+	From      string
+	To        int
 	uListener net.Listener
+	sub       string
 }
 
 func (s *Server) addUserConn(cid string, conn net.Conn) {
@@ -49,15 +51,22 @@ func (s *Server) getUserConn(cid string) (net.Conn, bool) {
 func (s *Server) addForward(f Forward) {
 	s.m.Lock()
 	defer s.m.Unlock()
+
 	s.forwards = append(s.forwards, f)
+	if s.cfg.domainTunnel {
+		go AddCaddyRouter(f.sub, s.cfg.domain, f.To)
+	}
 }
 
-func (s *Server) delForward(to string) {
+func (s *Server) delForward(to int) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	for i, ff := range s.forwards {
 		if ff.To == to {
 			ff.uListener.Close()
+			if s.cfg.domainTunnel {
+				go DelCaddyRouter(fmt.Sprintf("%s-%d", ff.sub, to))
+			}
 			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)
 			return
 		}
@@ -131,7 +140,7 @@ func (s *Server) handle(conn net.Conn) {
 }
 
 func (s *Server) handleCancel(rPort int) {
-	s.delForward(fmt.Sprintf(":%d", rPort))
+	s.delForward(rPort)
 	logger.InfoF("Cancel forward to port %d", rPort)
 }
 
@@ -150,7 +159,12 @@ func (s *Server) handleForward(commuConn net.Conn, buf []byte) {
 	defer uListener.Close()
 
 	logger.InfoF("Listening on forwarding port %d", uPort)
-	s.addForward(Forward{commuConn.RemoteAddr().String(), fmt.Sprintf(":%d", uPort), uListener})
+	s.addForward(Forward{
+		From:      commuConn.RemoteAddr().String(),
+		To:        uPort,
+		uListener: uListener,
+		sub:       uuid.NewString()[:7],
+	})
 	for {
 		userConn, err := uListener.Accept()
 		if err != nil {

@@ -8,11 +8,7 @@ import (
 type ConnMap struct {
 	conns map[string]net.Conn
 
-	mu sync.Mutex
-}
-
-var connMap = ConnMap{
-	conns: make(map[string]net.Conn),
+	mu sync.RWMutex
 }
 
 func (c *ConnMap) Add(id string, conn net.Conn) {

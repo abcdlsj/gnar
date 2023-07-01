@@ -1,43 +1,28 @@
 package server
 
 import (
-	"os"
-
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
-var (
-	port = 8910
-)
+func Command() *cobra.Command {
+	var (
+		cfgFile string
+		flagCfg Config
+	)
 
-var logger = logrus.New()
-
-var Command = &cobra.Command{
-	Use: "server",
-	Run: func(cmd *cobra.Command, args []string) {
-		run()
-	},
-}
-
-func init() {
-	Command.PersistentFlags().IntVarP(&port, "port", "p", 8910, "server port")
-
-	_ = Command.MarkFlagRequired("port")
-
-	logger.SetLevel(logLevel())
-	logger.SetFormatter(&logrus.JSONFormatter{
-		TimestampFormat: "2006-01-02 15:04:05",
-	})
-}
-
-func logLevel() logrus.Level {
-	if envDebug() {
-		return logrus.DebugLevel
+	cmd := &cobra.Command{
+		Use: "server",
+		Run: func(cmd *cobra.Command, args []string) {
+			if cfgFile != "" {
+				newServer(parseConfig(cfgFile)).Run()
+			} else {
+				newServer(flagCfg).Run()
+			}
+		},
 	}
-	return logrus.InfoLevel
-}
+	cmd.PersistentFlags().IntVarP(&flagCfg.Port, "port", "p", 8910, "server port")
+	cmd.PersistentFlags().IntVarP(&flagCfg.AdminPort, "admin-port", "a", 0, "admin server port")
+	cmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 
-func envDebug() bool {
-	return os.Getenv("DEBUG") != ""
+	return cmd
 }

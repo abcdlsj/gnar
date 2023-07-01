@@ -1,0 +1,47 @@
+{
+    "apps": {
+        "http": {
+            "servers": {
+                "gpipe": {
+                    "listen": [
+                        ":443"
+                    ],
+                    "routes": []
+                }
+            }
+        },
+        "tls": {
+            "automation": {
+                "policies": [
+                    {
+                        "subjects": [],
+                        "issuers": [
+                            {
+                                "challenges": {
+                                    "dns": {
+                                        "provider": {
+                                            "api_token": "<YOUR KEY>",  
+                                            "name": "cloudflare"
+                                        }
+                                    }
+                                },
+                                "module": "acme"
+                            },
+                            {
+                                "challenges": {
+                                    "dns": {
+                                        "provider": {
+                                            "api_token": "<YOUR KEY>",
+                                            "name": "cloudflare"
+                                        }
+                                    }
+                                },
+                                "module": "zerossl"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+}

@@ -2,13 +2,23 @@
 
 frp like tool, but with autohttps subdomain proxy.
 
-## feature
-- [x] simple code (less than 1000 lines) 
+- [x] simple code and with less third party dependency (above 500 lines) 
 - [x] support subdomain proxy (with caddy)
 - [x] run with cmd flag or config file
+
+## Will
 - [ ] password sign check
+- [ ] multi client forward support (currently only support one forward, but change is easy)
 - [ ] server side admin panel (currently already have simple pannel)
 - [ ] daemon mode
+- [ ] use yamux
+
+## Install
+
+```
+git clone https://github.com/abcdlsj/gpipe
+make
+```
 
 ## Usage
 
@@ -30,7 +40,7 @@ Flags:
 Use "gpipe [command] --help" for more information about a command.
 ```
 
-## client
+## Client
 ```
 Usage:
   gpipe client [flags]
@@ -44,7 +54,7 @@ Flags:
   -p, --server-port int      server port (default 8910)
 ```
 
-## server 
+## Server 
 ```
 Usage:
   gpipe server [flags]
@@ -112,5 +122,3 @@ A example.com <your server ip> (`@` is ok too)
 1. subdomain proxy not work
 make sure you have set the dns record to your server ip. 
 if you use cloudflare, need to set dns_key in caddy.json.
-
-

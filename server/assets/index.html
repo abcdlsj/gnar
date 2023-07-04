@@ -13,6 +13,7 @@
         <thead>
             <tr>
                 <th>From</th>
+                <th>Sub</th>
                 <th>To</th>
             </tr>
         </thead>
@@ -20,6 +21,7 @@
             {{range .forwards}}
             <tr>
                 <td>{{.From}}</td>
+                <td>{{.SubDomain}}</td>
                 <td>:{{.To}}</td>
             </tr>
             {{end}}

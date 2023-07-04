@@ -18,38 +18,37 @@ func newHttpClient() *http.Client {
 	return &http.Client{}
 }
 
-func AddCaddyRouter(sub string, domain string, port int) {
-	tunnelId := fmt.Sprintf("%s-%d", sub, port)
-	host := fmt.Sprintf("%s.%s", sub, domain)
+func addCaddyRouter(host string, port int) {
+	tunnelId := fmt.Sprintf("%s.%d", host, port)
 	resp, err := http.Post(caddyAddRouteUrl, "application/json", bytes.NewBuffer([]byte(fmt.Sprintf(caddyAddRouteF, tunnelId, host, port))))
 	if err != nil {
-		logger.ErrorF("Tunnel creation failed")
+		logger.ErrorF("Tunnel creation failed, err: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	resp, err = http.Post(caddyAddTlsSubjectsUrl, "application/json", bytes.NewBuffer([]byte(fmt.Sprintf("\"%s\"", host))))
 	if err != nil {
-		logger.ErrorF("Tunnel creation failed")
+		logger.ErrorF("Tunnel creation failed, err: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 	logger.InfoF("Tunnel created successfully, id: %s, host: %s", tunnelId, host)
 }
 
-func DelCaddyRouter(tunnelId string) {
+func delCaddyRouter(tunnelId string) {
 	logger.InfoF("Cleaning up tunnel, id: %s", tunnelId)
 
 	req, err := http.NewRequest("DELETE", fmt.Sprintf("http://127.0.0.1:2019/id/%s", tunnelId), nil)
 	if err != nil {
-		logger.ErrorF("Tunnel deletion failed")
+		logger.ErrorF("Tunnel deletion failed, err: %v", err)
 		return
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	_, err = newHttpClient().Do(req)
 	if err != nil {
-		logger.ErrorF("Tunnel deletion failed")
+		logger.ErrorF("Tunnel deletion failed, err: %v", err)
 	}
 
 	logger.InfoF("Tunnel deleted successfully, id: %s", tunnelId)

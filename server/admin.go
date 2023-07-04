@@ -16,11 +16,7 @@ var (
 	assetsFs embed.FS
 )
 
-func (s *Server) StartAdmin() {
-	if s.cfg.AdminPort == 0 {
-		return
-	}
-
+func (s *Server) startAdmin() {
 	tmpl := template.Must(template.New("").ParseFS(assetsFs, "assets/*.html"))
 
 	fe, _ := fs.Sub(assetsFs, "assets/static")
@@ -28,14 +24,16 @@ func (s *Server) StartAdmin() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		upbw, dnbw, total := proxy.CalculateBandwidth(s.traffics)
-		tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
+		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"forwards": s.forwards,
 			"traffic": map[string]interface{}{
 				"upbw":  upbw,
 				"dnbw":  dnbw,
 				"total": total,
 			},
-		})
+		}); err != nil {
+			logger.ErrorF("execute index.html error: %v", err)
+		}
 	})
 
 	logger.InfoF("admin server started on port %d", s.cfg.AdminPort)

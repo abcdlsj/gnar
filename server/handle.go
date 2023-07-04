@@ -32,8 +32,9 @@ type Server struct {
 type Forward struct {
 	From      string
 	To        int
+	SubDomain string
+
 	uListener net.Listener
-	sub       string
 }
 
 func (s *Server) addUserConn(cid string, conn net.Conn) {
@@ -52,10 +53,13 @@ func (s *Server) addForward(f Forward) {
 	s.m.Lock()
 	defer s.m.Unlock()
 
-	s.forwards = append(s.forwards, f)
 	if s.cfg.DomainTunnel {
-		go AddCaddyRouter(f.sub, s.cfg.Domain, f.To)
+		f.SubDomain = fmt.Sprintf("%s.%s", uuid.NewString()[:7], s.cfg.Domain)
+		go addCaddyRouter(f.SubDomain, f.To)
 	}
+
+	s.forwards = append(s.forwards, f)
+	logger.InfoF("Forward from %s to port %d", f.From, f.To)
 }
 
 func (s *Server) delForward(to int) {
@@ -65,9 +69,10 @@ func (s *Server) delForward(to int) {
 		if ff.To == to {
 			ff.uListener.Close()
 			if s.cfg.DomainTunnel {
-				go DelCaddyRouter(fmt.Sprintf("%s-%d", ff.sub, to))
+				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.SubDomain, ff.To))
 			}
 			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)
+			logger.InfoF("Cancel forward from %s to port %d", ff.From, ff.To)
 			return
 		}
 	}
@@ -101,7 +106,9 @@ func parseConfig(cfgFile string) Config {
 }
 
 func (s *Server) Run() {
-	go s.StartAdmin()
+	if s.cfg.AdminPort != 0 {
+		go s.startAdmin()
+	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.Port))
 	if err != nil {
@@ -163,7 +170,6 @@ func (s *Server) handleForward(commuConn net.Conn, buf []byte) {
 		From:      commuConn.RemoteAddr().String(),
 		To:        uPort,
 		uListener: uListener,
-		sub:       uuid.NewString()[:7],
 	})
 	for {
 		userConn, err := uListener.Accept()

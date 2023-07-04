@@ -16,8 +16,8 @@ import (
 type Config struct {
 	Port         int    `toml:"port"`
 	AdminPort    int    `toml:"admin-port"`    // zero means disable admin server
-	domainTunnel bool   `toml:"domain-tunnel"` // enable domain tunnel
-	domain       string `toml:"domain"`        // domain name
+	DomainTunnel bool   `toml:"domain-tunnel"` // enable domain tunnel
+	Domain       string `toml:"domain"`        // domain name
 }
 
 type Server struct {
@@ -53,8 +53,8 @@ func (s *Server) addForward(f Forward) {
 	defer s.m.Unlock()
 
 	s.forwards = append(s.forwards, f)
-	if s.cfg.domainTunnel {
-		go AddCaddyRouter(f.sub, s.cfg.domain, f.To)
+	if s.cfg.DomainTunnel {
+		go AddCaddyRouter(f.sub, s.cfg.Domain, f.To)
 	}
 }
 
@@ -64,7 +64,7 @@ func (s *Server) delForward(to int) {
 	for i, ff := range s.forwards {
 		if ff.To == to {
 			ff.uListener.Close()
-			if s.cfg.domainTunnel {
+			if s.cfg.DomainTunnel {
 				go DelCaddyRouter(fmt.Sprintf("%s-%d", ff.sub, to))
 			}
 			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)

@@ -1,2 +1,5 @@
 .envrc
+*.patch
+
+# binary
 gpipe

@@ -1,24 +1,16 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"sync"
 
-	"github.com/BurntSushi/toml"
 	"github.com/abcdlsj/gpipe/layer"
 	"github.com/abcdlsj/gpipe/logger"
 	"github.com/abcdlsj/gpipe/proxy"
 	"github.com/google/uuid"
 )
-
-type Config struct {
-	Port         int    `toml:"port"`
-	AdminPort    int    `toml:"admin-port"`    // zero means disable admin server
-	DomainTunnel bool   `toml:"domain-tunnel"` // enable domain tunnel
-	Domain       string `toml:"domain"`        // domain name
-}
 
 type Server struct {
 	cfg      Config
@@ -29,61 +21,6 @@ type Server struct {
 	m sync.RWMutex
 }
 
-type Forward struct {
-	From      string
-	To        int
-	SubDomain string
-
-	uListener net.Listener
-}
-
-func (s *Server) addUserConn(cid string, conn net.Conn) {
-	s.connMap.Add(cid, conn)
-}
-
-func (s *Server) delUserConn(cid string) {
-	s.connMap.Del(cid)
-}
-
-func (s *Server) getUserConn(cid string) (net.Conn, bool) {
-	return s.connMap.Get(cid)
-}
-
-func (s *Server) addForward(f Forward) {
-	s.m.Lock()
-	defer s.m.Unlock()
-
-	if s.cfg.DomainTunnel {
-		f.SubDomain = fmt.Sprintf("%s.%s", uuid.NewString()[:7], s.cfg.Domain)
-		go addCaddyRouter(f.SubDomain, f.To)
-	}
-
-	s.forwards = append(s.forwards, f)
-	logger.InfoF("Forward from %s to port %d", f.From, f.To)
-}
-
-func (s *Server) delForward(to int) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	for i, ff := range s.forwards {
-		if ff.To == to {
-			ff.uListener.Close()
-			if s.cfg.DomainTunnel {
-				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.SubDomain, ff.To))
-			}
-			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)
-			logger.InfoF("Cancel forward from %s to port %d", ff.From, ff.To)
-			return
-		}
-	}
-}
-
-func (s *Server) metric(t proxy.Traffic) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	s.traffics = append(s.traffics, t)
-}
-
 func newServer(cfg Config) *Server {
 	return &Server{
 		cfg: cfg,
@@ -91,18 +28,6 @@ func newServer(cfg Config) *Server {
 			conns: make(map[string]net.Conn),
 		},
 	}
-}
-
-func parseConfig(cfgFile string) Config {
-	data, err := os.ReadFile(cfgFile)
-	if err != nil {
-		logger.FatalF("Error reading config file: %v", err)
-	}
-
-	var cfg Config
-	toml.Unmarshal(data, &cfg)
-
-	return cfg
 }
 
 func (s *Server) Run() {
@@ -130,29 +55,56 @@ func (s *Server) Run() {
 }
 
 func (s *Server) handle(conn net.Conn) {
-	packetType, buf, err := layer.Read(conn)
-	if err != nil || buf == nil {
-		logger.WarnF("Error reading from connection: %v", err)
+	pt, buf, err := layer.ReadMsg(conn)
+	if err != nil {
+		logger.ErrorF("Error reading from connection: %v", err)
 		return
 	}
 
-	switch packetType {
+	switch pt {
 	case layer.RegisterForward:
-		s.handleForward(conn, buf)
+		msg := &layer.MsgNewProxy{}
+		if err := json.Unmarshal(buf, msg); err != nil {
+			logger.ErrorF("Error unmarshalling message: %v", err)
+			return
+		}
+		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
+			logger.WarnF("Token not match: %s", msg.Token)
+			return
+		}
+		s.handleForward(conn, msg)
 	case layer.ExchangeMsg:
-		s.handleMessage(conn, buf)
+		msg := &layer.MsgExchange{}
+		if err := json.Unmarshal(buf, msg); err != nil {
+			logger.ErrorF("Error unmarshalling message: %v", err)
+			return
+		}
+		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
+			logger.WarnF("Token not match: %s", msg.Token)
+			return
+		}
+		s.handleMessage(conn, msg)
 	case layer.CancelForward:
-		s.handleCancel(layer.ParseCancelPacket(buf))
+		msg := &layer.MsgCancelProxy{}
+		if err := json.Unmarshal(buf, msg); err != nil {
+			logger.ErrorF("Error unmarshalling message: %v", err)
+			return
+		}
+		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
+			logger.WarnF("Token not match: %s", msg.Token)
+			return
+		}
+		s.handleCancel(msg)
 	}
 }
 
-func (s *Server) handleCancel(rPort int) {
-	s.delForward(rPort)
-	logger.InfoF("Cancel forward to port %d", rPort)
+func (s *Server) handleCancel(msg *layer.MsgCancelProxy) {
+	s.delForward(msg.RemotePort)
+	logger.InfoF("Cancel port %d forward", msg.RemotePort)
 }
 
-func (s *Server) handleForward(commuConn net.Conn, buf []byte) {
-	uPort := layer.ParseRegisterPacket(buf)
+func (s *Server) handleForward(commuConn net.Conn, msg *layer.MsgNewProxy) {
+	uPort := msg.RemotePort
 	if isInvaliedPort(uPort) {
 		logger.ErrorF("Invalid forward to port: %d", uPort)
 		return
@@ -170,6 +122,7 @@ func (s *Server) handleForward(commuConn net.Conn, buf []byte) {
 		From:      commuConn.RemoteAddr().String(),
 		To:        uPort,
 		uListener: uListener,
+		SubDomain: msg.SubDomain,
 	})
 	for {
 		userConn, err := uListener.Accept()
@@ -180,22 +133,82 @@ func (s *Server) handleForward(commuConn net.Conn, buf []byte) {
 		go func() {
 			cid := uuid.NewString()[:layer.Len-1]
 			s.addUserConn(cid, userConn)
-			layer.ExchangeMsg.Send(commuConn, cid)
+			if err := layer.ExchangeMsg.Send(commuConn, s.cfg.Token, cid); err != nil {
+				logger.ErrorF("Error sending message: %v", err)
+			}
+			logger.DebugF("Send new connection id: %s", cid)
 		}()
 	}
 }
 
-func (s *Server) handleMessage(conn net.Conn, buf []byte) {
-	rid := layer.ParseExchangePacket(buf)
-	uConn, ok := s.getUserConn(rid)
+func (s *Server) handleMessage(conn net.Conn, msg *layer.MsgExchange) {
+	logger.DebugF("Receive message from client: %s", msg.ConnId)
+	uConn, ok := s.getUserConn(msg.ConnId)
 	if !ok {
 		return
 	}
 
-	defer s.delUserConn(rid)
+	defer s.delUserConn(msg.ConnId)
 	s.metric(proxy.P(conn, uConn))
 }
 
 func isInvaliedPort(port int) bool {
 	return port < 0 || port > 65535
+}
+
+type Forward struct {
+	From      string
+	To        int
+	SubDomain string
+
+	uListener net.Listener
+}
+
+func (s *Server) addUserConn(cid string, conn net.Conn) {
+	s.connMap.Add(cid, conn)
+}
+
+func (s *Server) delUserConn(cid string) {
+	s.connMap.Del(cid)
+}
+
+func (s *Server) getUserConn(cid string) (net.Conn, bool) {
+	return s.connMap.Get(cid)
+}
+
+func (s *Server) addForward(f Forward) {
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	if s.cfg.DomainTunnel {
+		if f.SubDomain == "" {
+			f.SubDomain = fmt.Sprintf("%s.%s", uuid.NewString()[:7], s.cfg.Domain)
+		}
+		go addCaddyRouter(f.SubDomain, f.To)
+	}
+
+	s.forwards = append(s.forwards, f)
+	logger.InfoF("Forward from %s to port %d", f.From, f.To)
+}
+
+func (s *Server) delForward(to int) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	for i, ff := range s.forwards {
+		if ff.To == to {
+			ff.uListener.Close()
+			if s.cfg.DomainTunnel {
+				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.SubDomain, ff.To))
+			}
+			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)
+			logger.InfoF("Cancel forward from %s to port %d", ff.From, ff.To)
+			return
+		}
+	}
+}
+
+func (s *Server) metric(t proxy.Traffic) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.traffics = append(s.traffics, t)
 }

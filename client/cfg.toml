@@ -1,6 +1,13 @@
-server-host = "your server ip"
-server-port = 8910
+server-host = "localhost"
+server-port = 8910 
+# token = "abcdlsj" # optional
 
 [[forwards]]
+proxy-name = "python_http_file_service" # optional
+subdomain = "python3-http" # optional
 local-port = 3000
 remote-port = 9001
+
+[[forwards]]
+local-port = 3001
+remote-port = 9002

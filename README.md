@@ -5,13 +5,13 @@ frp like tool, but with autohttps subdomain proxy.
 - [x] simple code and with less third party dependency (above 500 lines) 
 - [x] support subdomain proxy (with caddy)
 - [x] run with cmd flag or config file
+- [x] multi client forward support
+- [x] token check
 
 ## Will
-- [ ] password sign check
-- [ ] multi client forward support (currently only support one forward, but change is easy)
 - [ ] server side admin panel (currently already have simple pannel)
 - [ ] daemon mode
-- [ ] use yamux
+- [ ] use yamux, multiplexing connection
 
 ## Install
 
@@ -23,15 +23,17 @@ make
 ## Usage
 
 ```
+gpipe is a frp like tool.
+
 Usage:
   gpipe [flags]
   gpipe [command]
 
 Available Commands:
-  client      
+  client     
+  server      
   completion  Generate the autocompletion script for the specified shell
   help        Help about any command
-  server      
 
 Flags:
   -h, --help      help for gpipe
@@ -50,8 +52,11 @@ Flags:
   -u, --forward-port int     forward port
   -h, --help                 help for client
   -l, --local-port int       local port
+  -n, --proxy-name string    proxy name
   -s, --server-host string   server host (default "localhost")
   -p, --server-port int      server port (default 8910)
+  -d, --subdomain string     subdomain
+  -t, --token string         token
 ```
 
 ## Server 
@@ -66,6 +71,7 @@ Flags:
   -d, --domain-tunnel    enable domain tunnel
   -h, --help             help for server
   -p, --port int         server port (default 8910)
+  -t, --token string     token
 ```
 
 ## Simple Start

@@ -13,6 +13,7 @@ func Command() *cobra.Command {
 		adminPort    int
 		domain       string
 		domainTunnel bool
+		token        string
 	)
 
 	cmd := &cobra.Command{
@@ -21,11 +22,11 @@ func Command() *cobra.Command {
 			if cfgFile != "" {
 				newServer(parseConfig(cfgFile)).Run()
 			} else {
-
 				flagCfg.Port = port
 				flagCfg.AdminPort = adminPort
 				flagCfg.Domain = domain
 				flagCfg.DomainTunnel = domainTunnel
+				flagCfg.Token = token
 
 				newServer(flagCfg).Run()
 			}
@@ -35,6 +36,7 @@ func Command() *cobra.Command {
 	cmd.PersistentFlags().IntVarP(&adminPort, "admin-port", "a", 0, "admin server port")
 	cmd.PersistentFlags().BoolVarP(&domainTunnel, "domain-tunnel", "d", false, "enable domain tunnel")
 	cmd.PersistentFlags().StringVarP(&domain, "domain", "D", "", "domain name")
+	cmd.PersistentFlags().StringVarP(&token, "token", "t", "", "token")
 	cmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 
 	return cmd

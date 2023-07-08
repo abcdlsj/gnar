@@ -4,57 +4,36 @@ import (
 	"io"
 )
 
-type PacketType byte
-
-const Len = 6
-
-var (
-	RegisterForward PacketType = PacketType(0x01)
-	ExchangeMsg     PacketType = PacketType(0x02)
-	CancelForward   PacketType = PacketType(0x03)
-)
-
-func ParseRegisterPacket(buf []byte) int {
-	return int(buf[1])<<8 + int(buf[2])
-}
-
-func ParseCancelPacket(buf []byte) int {
-	return int(buf[1])<<8 + int(buf[2])
-}
-
-func ParseExchangePacket(buf []byte) string {
-	return string(buf[1:])
-}
-
 func (p PacketType) Send(w io.Writer, payloads ...interface{}) error {
-	var err error
-
-	payload := make([]byte, Len)
-	payload[0] = byte(p)
-
+	var msg IMsg
 	switch p {
 	case RegisterForward:
-		uport := payloads[0].(int)
-		payload[1] = byte(uport >> 8)
-		payload[2] = byte(uport)
-
-		_, err = w.Write(payload)
-
+		msg = MsgNewProxy{
+			AuthMsg: AuthMsg{
+				Token: payloads[0].(string),
+			},
+			ProxyName:  payloads[1].(string),
+			RemotePort: payloads[2].(int),
+			SubDomain:  payloads[3].(string),
+		}
 	case ExchangeMsg:
-		cid := payloads[0].(string)
-		copy(payload[1:], []byte(cid))
-
-		_, err = w.Write(payload)
-
+		msg = MsgExchange{
+			AuthMsg: AuthMsg{
+				Token: payloads[0].(string),
+			},
+			ConnId: payloads[1].(string),
+		}
 	case CancelForward:
-		uport := payloads[0].(int)
-		payload[1] = byte(uport >> 8)
-		payload[2] = byte(uport)
-
-		_, err = w.Write(payload)
+		msg = MsgCancelProxy{
+			AuthMsg: AuthMsg{
+				Token: payloads[0].(string),
+			},
+			ProxyName:  payloads[1].(string),
+			RemotePort: payloads[2].(int),
+		}
 	}
 
-	return err
+	return sendMsg(w, p, msg)
 }
 
 func Read(r io.Reader) (PacketType, []byte, error) {

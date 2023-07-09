@@ -183,6 +183,8 @@ func (s *Server) addForward(f Forward) {
 	if s.cfg.DomainTunnel {
 		if f.SubDomain == "" {
 			f.SubDomain = fmt.Sprintf("%s.%s", uuid.NewString()[:7], s.cfg.Domain)
+		} else {
+			f.SubDomain = fmt.Sprintf("%s.%s", f.SubDomain, s.cfg.Domain)
 		}
 		go addCaddyRouter(f.SubDomain, f.To)
 	}

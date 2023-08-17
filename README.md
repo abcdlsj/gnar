@@ -1,4 +1,4 @@
-# gpipe
+# Pipe
 
 frp like tool, but with autohttps subdomain proxy.
 
@@ -16,18 +16,18 @@ frp like tool, but with autohttps subdomain proxy.
 ## Install
 
 ```
-git clone https://github.com/abcdlsj/gpipe
+git clone https://github.com/abcdlsj/pipe
 make
 ```
 
 ## Usage
 
 ```
-gpipe is a frp like tool.
+pipe is a frp like tool.
 
 Usage:
-  gpipe [flags]
-  gpipe [command]
+  pipe [flags]
+  pipe [command]
 
 Available Commands:
   client     
@@ -36,16 +36,16 @@ Available Commands:
   help        Help about any command
 
 Flags:
-  -h, --help      help for gpipe
-  -v, --version   version for gpipe
+  -h, --help      help for pipe
+  -v, --version   version for pipe
 
-Use "gpipe [command] --help" for more information about a command.
+Use "pipe [command] --help" for more information about a command.
 ```
 
 ## Client
 ```
 Usage:
-  gpipe client [flags]
+  pipe client [flags]
 
 Flags:
   -c, --config string        config file
@@ -62,7 +62,7 @@ Flags:
 ## Server 
 ```
 Usage:
-  gpipe server [flags]
+  pipe server [flags]
 
 Flags:
   -a, --admin-port int   admin server port
@@ -78,7 +78,7 @@ Flags:
 
 Server
 ```
-gpipe server -p 8910
+pipe server -p 8910
 ```
 
 Client
@@ -86,7 +86,7 @@ Client
 # start a service
 python3 -m http.server 3000
 # start forward
-gpipe client -s localhost -p 8910 -l 3000 -u 9001
+pipe client -s localhost -p 8910 -l 3000 -u 9001
 ```
 
 view `host:9001` and you will see the service.
@@ -102,17 +102,17 @@ A example.com <your server ip> (`@` is ok too)
 
 2. start caddy server
 ```
-[sudo] caddy run --config <gpipe path>/server/caddy.json
+[sudo] caddy run --config <pipe path>/server/caddy.json
 ```
 
-3. start gpipe server with `domain-tunnel` flag
+3. start pipe server with `domain-tunnel` flag
 ```
-./gpipe server -a 8911 -D <example.com> -d -p 8910
+./pipe server -a 8911 -D <example.com> -d -p 8910
 ``` 
 
-4. start gpipe client
+4. start pipe client
 ```
-./gpipe client -s localhost -p 8910 -l 3000 -u 9001
+./pipe client -s localhost -p 8910 -l 3000 -u 9001
 ```
 
 5. now you can find the subdomain in server log, like this

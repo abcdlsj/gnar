@@ -4,7 +4,7 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
-	"github.com/abcdlsj/gpipe/logger"
+	"github.com/abcdlsj/pipe/logger"
 )
 
 type Config struct {

@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/abcdlsj/gpipe/layer"
-	"github.com/abcdlsj/gpipe/logger"
-	"github.com/abcdlsj/gpipe/proxy"
+	"github.com/abcdlsj/pipe/layer"
+	"github.com/abcdlsj/pipe/logger"
+	"github.com/abcdlsj/pipe/proxy"
 )
 
 type Client struct {

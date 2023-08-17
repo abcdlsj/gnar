@@ -1,6 +1,6 @@
 package main
 
-import "github.com/abcdlsj/gpipe/cmd"
+import "github.com/abcdlsj/pipe/cmd"
 
 var gitHash string
 var buildStamp string

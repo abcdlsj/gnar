@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/abcdlsj/gpipe/logger"
-	"github.com/abcdlsj/gpipe/proxy"
+	"github.com/abcdlsj/pipe/logger"
+	"github.com/abcdlsj/pipe/proxy"
 )
 
 var (

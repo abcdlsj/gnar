@@ -2,4 +2,4 @@
 *.patch
 
 # binary
-gpipe
+pipe

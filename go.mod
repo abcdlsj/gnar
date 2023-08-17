@@ -1,4 +1,4 @@
-module github.com/abcdlsj/gpipe
+module github.com/abcdlsj/pipe
 
 go 1.20
 

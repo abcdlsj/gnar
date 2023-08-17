@@ -3,16 +3,16 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/abcdlsj/gpipe/client"
-	"github.com/abcdlsj/gpipe/logger"
-	"github.com/abcdlsj/gpipe/server"
+	"github.com/abcdlsj/pipe/client"
+	"github.com/abcdlsj/pipe/logger"
+	"github.com/abcdlsj/pipe/server"
 	"github.com/spf13/cobra"
 )
 
 func Execute(gitHash, buildStamp string) {
 	var RootCmd = &cobra.Command{
-		Use:  "gpipe",
-		Long: "gpipe is a frp like tool.",
+		Use:  "pipe",
+		Long: "pipe is a frp like tool.",
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
 		},

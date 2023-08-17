@@ -2,7 +2,7 @@
     "apps": {
         "http": {
             "servers": {
-                "gpipe": {
+                "pipe": {
                     "listen": [
                         ":443"
                     ],

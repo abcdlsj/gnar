@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/abcdlsj/gpipe/logger"
+	"github.com/abcdlsj/pipe/logger"
 )
 
 type IMsg interface{}

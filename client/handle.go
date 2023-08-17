@@ -47,7 +47,7 @@ func (c *Client) Run() {
 			for {
 				p, buf, err := layer.ReadMsg(rConn)
 				if err != nil {
-					logger.ErrorF("Error reading from connection: %v", err)
+					logger.ErrorF("Error reading from connection: %v", err) // FIXME: if connection timeout, will cause error
 					return
 				}
 				if p != layer.ExchangeMsg {

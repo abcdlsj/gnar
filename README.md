@@ -1,17 +1,18 @@
 # Pipe
 
-frp like tool, but with autohttps subdomain proxy.
+frp-like Tool with AutoHTTPs Subdomain Proxy
 
-- [x] simple code and with less third party dependency (above 500 lines) 
-- [x] support subdomain proxy (with caddy)
-- [x] run with cmd flag or config file
-- [x] multi client forward support
-- [x] token check
+Features:
+- [x] Simple implementation with minimal third-party dependencies (core code is shorter than 1000 lines)
+- [x] Support for subdomain proxy using Caddy server
+- [x] Can be run via command-line flags or a configuration file
+- [x] Supports forwarding from multiple clients
+- [x] Includes token-based authentication for added security
 
-## Will
-- [ ] server side admin panel (currently already have simple pannel)
-- [ ] daemon mode
-- [ ] use yamux, multiplexing connection
+Future Plans:
+- [ ] Server-side admin panel (currently has a simple panel)
+- [ ] Daemon mode for background execution
+- [ ] Integration of yamux for multiplexing connections
 
 ## Install
 

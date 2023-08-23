@@ -15,7 +15,7 @@ type Buf struct {
 var bufPool = sync.Pool{
 	New: func() interface{} {
 		return &Buf{
-			buf: make([]byte, 1024),
+			buf: make([]byte, 4096),
 		}
 	},
 }

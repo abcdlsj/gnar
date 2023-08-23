@@ -3,6 +3,8 @@ package logger
 import (
 	"log"
 	"os"
+
+	"github.com/abcdlsj/cr"
 )
 
 type Level int
@@ -22,20 +24,12 @@ func init() {
 }
 
 var (
-	DEBUG_PREFIX = "[DEBUG]" + " "
-	INFO_PREFIX  = blue("[INFO]") + " "
-	WARN_PREFIX  = red("[WARN]") + " "
-	ERROR_PREFIX = red("[ERROR]") + " "
-	FATAL_PREFIX = red("[FATAL]") + " "
+	DEBUG_PREFIX = "DEBUG" + " "
+	INFO_PREFIX  = cr.PLBlue("INF") + " "
+	WARN_PREFIX  = cr.PLRed("WARN") + " "
+	ERROR_PREFIX = cr.PLRed("ERR") + " "
+	FATAL_PREFIX = cr.PLRed("FATAL") + " "
 )
-
-func red(s string) string {
-	return "\033[31m" + s + "\033[0m"
-}
-
-func blue(s string) string {
-	return "\033[34m" + s + "\033[0m"
-}
 
 var globalLevel = INFO
 

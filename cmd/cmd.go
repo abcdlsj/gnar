@@ -12,7 +12,7 @@ import (
 func Execute(gitHash, buildStamp string) {
 	var RootCmd = &cobra.Command{
 		Use:  "pipe",
-		Long: "pipe is a frp like tool.",
+		Long: "pipe is a proxy tool.",
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
 		},

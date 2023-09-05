@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/abcdlsj/cr"
 	"github.com/abcdlsj/pipe/logger"
 )
 
@@ -33,7 +34,7 @@ func addCaddyRouter(host string, port int) {
 		return
 	}
 	defer resp.Body.Close()
-	logger.InfoF("Tunnel created successfully, id: %s, host: %s", tunnelId, host)
+	logger.InfoF("Tunnel created successfully, id: %s, host: %s", tunnelId, cr.PWhiteUnderline(host))
 }
 
 func delCaddyRouter(tunnelId string) {

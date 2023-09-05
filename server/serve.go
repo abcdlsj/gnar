@@ -69,7 +69,7 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
-			logger.WarnF("Token not match: %s", msg.Token)
+			logger.WarnF("Receive new forward request, token not match: [%s]", msg.Token)
 			return
 		}
 		s.handleForward(conn, msg)
@@ -80,7 +80,7 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
-			logger.WarnF("Token not match: %s", msg.Token)
+			logger.WarnF("Receive exchange request, token not match: [%s]", msg.Token)
 			return
 		}
 		s.handleMessage(conn, msg)
@@ -91,7 +91,7 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
-			logger.WarnF("Token not match: %s", msg.Token)
+			logger.WarnF("Receive cancel request, token not match: [%s]", msg.Token)
 			return
 		}
 		s.handleCancel(msg)

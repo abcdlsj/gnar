@@ -55,7 +55,7 @@ func (c *Client) Run() {
 				}
 
 				if c.cfg.Token != "" && msg.Token != c.cfg.Token {
-					logger.ErrorF("Token not match: %s", msg.Token)
+					logger.FatalF("Token not match: [%s]", msg.Token)
 					return
 				}
 

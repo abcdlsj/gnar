@@ -1,5 +1,8 @@
 # Pipe
 
+[![asciicast](https://asciinema.org/a/606328.svg)](https://asciinema.org/a/606328)
+**Do not destroy the server!!!**
+
 frp-like Tool with AutoHTTPs Subdomain Proxy
 
 Features:

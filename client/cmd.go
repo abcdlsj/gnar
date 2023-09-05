@@ -30,8 +30,8 @@ func Command() *cobra.Command {
 					SubDomain:  subdomain,
 					ProxyName:  proxyName,
 				}
-				flagCfg.ServerHost = shost
-				flagCfg.ServerPort = sport
+				flagCfg.SvrHost = shost
+				flagCfg.SvrPort = sport
 				flagCfg.Token = token
 
 				newClient(flagCfg).Run()
@@ -43,8 +43,8 @@ func Command() *cobra.Command {
 
 	cfg.PersistentFlags().StringVarP(&shost, "server-host", "s", "localhost", "server host")
 	cfg.PersistentFlags().IntVarP(&sport, "server-port", "p", 8910, "server port")
-	cfg.PersistentFlags().IntVarP(&lport, "local-port", "l", 0, "local port")
 	cfg.PersistentFlags().IntVarP(&fport, "forward-port", "u", 0, "forward port")
+	cfg.PersistentFlags().IntVarP(&lport, "local-port", "l", 0, "local port")
 	cfg.PersistentFlags().StringVarP(&token, "token", "t", "", "token")
 	cfg.PersistentFlags().StringVarP(&subdomain, "subdomain", "d", "", "subdomain")
 	cfg.PersistentFlags().StringVarP(&proxyName, "proxy-name", "n", "", "proxy name")

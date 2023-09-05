@@ -8,10 +8,10 @@ import (
 )
 
 type Config struct {
-	ServerHost string    `toml:"server-host"`
-	ServerPort int       `toml:"server-port"`
-	Token      string    `toml:"token"`
-	Forwards   []Forward `toml:"forwards"`
+	SvrHost  string    `toml:"server-host"`
+	SvrPort  int       `toml:"server-port"`
+	Token    string    `toml:"token"`
+	Forwards []Forward `toml:"forwards"`
 }
 
 type Forward struct {

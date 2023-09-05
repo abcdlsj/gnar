@@ -6,8 +6,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/abcdlsj/pipe/layer"
 	"github.com/abcdlsj/pipe/logger"
+	"github.com/abcdlsj/pipe/packet"
 	"github.com/abcdlsj/pipe/proxy"
 	"github.com/google/uuid"
 )
@@ -55,15 +55,15 @@ func (s *Server) Run() {
 }
 
 func (s *Server) handle(conn net.Conn) {
-	pt, buf, err := layer.ReadMsg(conn)
+	pt, buf, err := packet.ReadMsg(conn)
 	if err != nil {
 		logger.ErrorF("Error reading from connection: %v", err)
 		return
 	}
 
 	switch pt {
-	case layer.RegisterForward:
-		msg := &layer.MsgNewProxy{}
+	case packet.RegisterForward:
+		msg := &packet.MsgNewProxy{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
@@ -73,8 +73,8 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 		s.handleForward(conn, msg)
-	case layer.ExchangeMsg:
-		msg := &layer.MsgExchange{}
+	case packet.ExchangeMsg:
+		msg := &packet.MsgExchange{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
@@ -84,8 +84,8 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 		s.handleMessage(conn, msg)
-	case layer.CancelForward:
-		msg := &layer.MsgCancelProxy{}
+	case packet.CancelForward:
+		msg := &packet.MsgCancelProxy{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
@@ -98,12 +98,12 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
-func (s *Server) handleCancel(msg *layer.MsgCancelProxy) {
+func (s *Server) handleCancel(msg *packet.MsgCancelProxy) {
 	s.delForward(msg.RemotePort)
 	logger.InfoF("Cancel port %d forward", msg.RemotePort)
 }
 
-func (s *Server) handleForward(commuConn net.Conn, msg *layer.MsgNewProxy) {
+func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgNewProxy) {
 	uPort := msg.RemotePort
 	if isInvaliedPort(uPort) {
 		logger.ErrorF("Invalid forward to port: %d", uPort)
@@ -131,9 +131,9 @@ func (s *Server) handleForward(commuConn net.Conn, msg *layer.MsgNewProxy) {
 		}
 		logger.DebugF("Accept new user connection: %s", userConn.RemoteAddr().String())
 		go func() {
-			cid := uuid.NewString()[:layer.Len-1]
+			cid := uuid.NewString()[:packet.Len-1]
 			s.addUserConn(cid, userConn)
-			if err := layer.ExchangeMsg.Send(commuConn, s.cfg.Token, cid); err != nil {
+			if err := packet.ExchangeMsg.Send(commuConn, s.cfg.Token, cid); err != nil {
 				logger.ErrorF("Error sending message: %v", err)
 			}
 			logger.DebugF("Send new connection id: %s", cid)
@@ -141,7 +141,7 @@ func (s *Server) handleForward(commuConn net.Conn, msg *layer.MsgNewProxy) {
 	}
 }
 
-func (s *Server) handleMessage(conn net.Conn, msg *layer.MsgExchange) {
+func (s *Server) handleMessage(conn net.Conn, msg *packet.MsgExchange) {
 	logger.DebugF("Receive message from client: %s", msg.ConnId)
 	uConn, ok := s.getUserConn(msg.ConnId)
 	if !ok {

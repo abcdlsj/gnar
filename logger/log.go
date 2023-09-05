@@ -24,11 +24,11 @@ func init() {
 }
 
 var (
-	DEBUG_PREFIX = "DEBUG" + " "
-	INFO_PREFIX  = cr.PLBlue("INF") + " "
-	WARN_PREFIX  = cr.PLRed("WARN") + " "
-	ERROR_PREFIX = cr.PLRed("ERR") + " "
-	FATAL_PREFIX = cr.PLRed("FATAL") + " "
+	DEBUG_PREFIX = cr.PCyan("DEB") + " "
+	INFO_PREFIX  = cr.PGreen("INF") + " "
+	WARN_PREFIX  = cr.PYellow("WARN") + " "
+	ERROR_PREFIX = cr.PRed("ERR") + " "
+	FATAL_PREFIX = cr.PRedBgWhite("FATAL") + " "
 )
 
 var globalLevel = INFO

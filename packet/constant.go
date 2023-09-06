@@ -7,10 +7,11 @@ type PacketType byte
 const Len = 6
 
 var (
-	Unknown                    = PacketType(0x00)
-	RegisterForward PacketType = PacketType(0x01)
-	ExchangeMsg     PacketType = PacketType(0x02)
-	CancelForward   PacketType = PacketType(0x03)
+	Unknown             = PacketType(0x00)
+	Forward  PacketType = PacketType(0x01)
+	Accept   PacketType = PacketType(0x02)
+	Exchange PacketType = PacketType(0x03)
+	Cancel   PacketType = PacketType(0x04)
 )
 
 var (

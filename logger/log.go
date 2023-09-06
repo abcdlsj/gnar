@@ -24,7 +24,7 @@ func init() {
 }
 
 var (
-	DEBUG_PREFIX = cr.PCyan("DEB") + " "
+	DEBUG_PREFIX = cr.PCyan("DEBUG") + " "
 	INFO_PREFIX  = cr.PGreen("INF") + " "
 	WARN_PREFIX  = cr.PYellow("WARN") + " "
 	ERROR_PREFIX = cr.PRed("ERR") + " "

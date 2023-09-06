@@ -13,29 +13,39 @@ type AuthMsg struct {
 	Token string `json:"token"`
 }
 
-type MsgNewProxy struct {
+type MsgForward struct {
 	AuthMsg
 	ProxyName  string `json:"proxy_name"`
 	SubDomain  string `json:"subdomain"`
 	RemotePort int    `json:"remote_port"`
 }
 
-type MsgExchange struct {
+type MsgAccept struct {
+	AuthMsg
+	Domain string `json:"domain"`
+	Status string `json:"status"`
+}
+
+type MsgExchang struct {
 	AuthMsg
 	ConnId string `json:"conn_id"`
 }
 
-type MsgCancelProxy struct {
+type MsgCancel struct {
 	AuthMsg
 	ProxyName  string `json:"proxy_name"` // optional
 	RemotePort int    `json:"remote_port"`
 }
 
+type MsgNope struct {
+	AuthMsg
+}
+
 func (p PacketType) Send(w io.Writer, payloads ...interface{}) error {
 	var msg IMsg
 	switch p {
-	case RegisterForward:
-		msg = MsgNewProxy{
+	case Forward:
+		msg = MsgForward{
 			AuthMsg: AuthMsg{
 				Token: payloads[0].(string),
 			},
@@ -43,21 +53,31 @@ func (p PacketType) Send(w io.Writer, payloads ...interface{}) error {
 			RemotePort: payloads[2].(int),
 			SubDomain:  payloads[3].(string),
 		}
-	case ExchangeMsg:
-		msg = MsgExchange{
+	case Exchange:
+		msg = MsgExchang{
 			AuthMsg: AuthMsg{
 				Token: payloads[0].(string),
 			},
 			ConnId: payloads[1].(string),
 		}
-	case CancelForward:
-		msg = MsgCancelProxy{
+	case Accept:
+		msg = MsgAccept{
+			AuthMsg: AuthMsg{
+				Token: payloads[0].(string),
+			},
+			Domain: payloads[1].(string),
+			Status: payloads[2].(string),
+		}
+	case Cancel:
+		msg = MsgCancel{
 			AuthMsg: AuthMsg{
 				Token: payloads[0].(string),
 			},
 			ProxyName:  payloads[1].(string),
 			RemotePort: payloads[2].(int),
 		}
+	default:
+		return ErrInvalidMsg
 	}
 
 	return sendMsg(w, p, msg)

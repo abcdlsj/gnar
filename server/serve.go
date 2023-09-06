@@ -54,6 +54,10 @@ func (s *Server) Run() {
 	}
 }
 
+func (s *Server) checkToken(token string) bool {
+	return s.cfg.Token != "" && s.cfg.Token != token
+}
+
 func (s *Server) handle(conn net.Conn) {
 	pt, buf, err := packet.ReadMsg(conn)
 	if err != nil {
@@ -62,35 +66,48 @@ func (s *Server) handle(conn net.Conn) {
 	}
 
 	switch pt {
-	case packet.RegisterForward:
-		msg := &packet.MsgNewProxy{}
+	case packet.Forward:
+		failChan := make(chan struct{})
+		defer close(failChan)
+
+		go func() {
+			defer conn.Close()
+			<-failChan
+			if err := packet.Accept.Send(conn, s.cfg.Token, "", "failed"); err != nil {
+				logger.ErrorF("Error sending accept message: %v", err)
+			}
+		}()
+
+		msg := &packet.MsgForward{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
 		}
-		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
+		if s.checkToken(msg.Token) {
 			logger.WarnF("Receive new forward request, token not match: [%s]", msg.Token)
+			failChan <- struct{}{}
 			return
 		}
-		s.handleForward(conn, msg)
-	case packet.ExchangeMsg:
-		msg := &packet.MsgExchange{}
+
+		s.handleForward(conn, msg, failChan)
+	case packet.Exchange:
+		msg := &packet.MsgExchang{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
 		}
-		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
+		if s.checkToken(msg.Token) {
 			logger.WarnF("Receive exchange request, token not match: [%s]", msg.Token)
 			return
 		}
-		s.handleMessage(conn, msg)
-	case packet.CancelForward:
-		msg := &packet.MsgCancelProxy{}
+		s.handleExchange(conn, msg)
+	case packet.Cancel:
+		msg := &packet.MsgCancel{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
 		}
-		if s.cfg.Token != "" && msg.Token != s.cfg.Token {
+		if s.checkToken(msg.Token) {
 			logger.WarnF("Receive cancel request, token not match: [%s]", msg.Token)
 			return
 		}
@@ -98,21 +115,23 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
-func (s *Server) handleCancel(msg *packet.MsgCancelProxy) {
+func (s *Server) handleCancel(msg *packet.MsgCancel) {
 	s.delForward(msg.RemotePort)
 	logger.InfoF("Cancel port %d forward", msg.RemotePort)
 }
 
-func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgNewProxy) {
+func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgForward, failChan chan struct{}) {
 	uPort := msg.RemotePort
 	if isInvaliedPort(uPort) {
 		logger.ErrorF("Invalid forward to port: %d", uPort)
+		failChan <- struct{}{}
 		return
 	}
 
 	uListener, err := net.Listen("tcp", fmt.Sprintf(":%d", uPort))
 	if err != nil {
 		logger.ErrorF("Error listening: %v, port: %d", err, uPort)
+		failChan <- struct{}{}
 		return
 	}
 	defer uListener.Close()
@@ -124,6 +143,20 @@ func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgNewProxy) {
 		uListener: uListener,
 		SubDomain: msg.SubDomain,
 	})
+
+	logger.InfoF("Forward from %s to port %d", commuConn.RemoteAddr().String(), uPort)
+	logger.DebugF("Send accept message to client: %s", commuConn.RemoteAddr().String())
+
+	domain := fmt.Sprintf("%s.%s", msg.SubDomain, s.cfg.Domain)
+	if !s.cfg.DomainTunnel {
+		domain = ""
+	}
+
+	if err := packet.Accept.Send(commuConn, s.cfg.Token, domain, "success"); err != nil {
+		logger.ErrorF("Error sending accept message: %v", err)
+		return
+	}
+
 	for {
 		userConn, err := uListener.Accept()
 		if err != nil {
@@ -133,7 +166,7 @@ func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgNewProxy) {
 		go func() {
 			cid := uuid.NewString()[:packet.Len-1]
 			s.addUserConn(cid, userConn)
-			if err := packet.ExchangeMsg.Send(commuConn, s.cfg.Token, cid); err != nil {
+			if err := packet.Exchange.Send(commuConn, s.cfg.Token, cid); err != nil {
 				logger.ErrorF("Error sending message: %v", err)
 			}
 			logger.DebugF("Send new connection id: %s", cid)
@@ -141,7 +174,7 @@ func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgNewProxy) {
 	}
 }
 
-func (s *Server) handleMessage(conn net.Conn, msg *packet.MsgExchange) {
+func (s *Server) handleExchange(conn net.Conn, msg *packet.MsgExchang) {
 	logger.DebugF("Receive message from client: %s", msg.ConnId)
 	uConn, ok := s.getUserConn(msg.ConnId)
 	if !ok {
@@ -190,7 +223,6 @@ func (s *Server) addForward(f Forward) {
 	}
 
 	s.forwards = append(s.forwards, f)
-	logger.InfoF("Forward from %s to port %d", f.From, f.To)
 }
 
 func (s *Server) delForward(to int) {

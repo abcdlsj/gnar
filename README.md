@@ -11,9 +11,10 @@ Features:
 - [x] Can be run via command-line flags or a configuration file
 - [x] Supports forwarding from multiple clients
 - [x] Includes token-based authentication for added security
+- [x] Server-side admin panel (currently, it's simple)
 
 Future Plans:
-- [ ] Server-side admin panel (currently has a simple panel)
+
 - [ ] Daemon mode for background execution
 - [ ] Integration of yamux for multiplexing connections
 
@@ -77,6 +78,10 @@ Flags:
   -p, --port int         server port (default 8910)
   -t, --token string     token
 ```
+
+### Server admin panel
+
+![admin panel](screenshot-server-admin.png)
 
 ## Simple Start
 

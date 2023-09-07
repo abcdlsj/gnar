@@ -1,15 +1,14 @@
 package client
 
 import (
-	"encoding/json"
 	"fmt"
+	"github.com/abcdlsj/pipe/protocol"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/packet"
 	"github.com/abcdlsj/pipe/proxy"
 )
 
@@ -33,56 +32,39 @@ func (c *Client) Run() {
 			if err != nil {
 				logger.ErrorF("Error connecting to remote: %v", err)
 			}
-			if err := packet.Forward.Send(rConn, buildMsg(packet.Forward, c.cfg, forward)...); err != nil {
-				logger.ErrorF("Error writing to remote: %v", err)
+			if err := protocol.SendForwardMsg(rConn, c.cfg.Token, forward.ProxyName,
+				forward.SubDomain, forward.RemotePort); err != nil {
+
+				logger.FatalF("Error send forward msg to remote: %v", err)
 			}
 
+			accept, err := protocol.ReadAccpetMsg(rConn)
+			if err != nil {
+				logger.FatalF("Error read accept msg from remote: %v", err)
+			}
+
+			if c.tokenCheck(accept.Token) {
+				logger.FatalF("Accept msg token not match: [%s]", accept.Token)
+			}
+
+			if accept.Status != "success" {
+				logger.FatalF("Forward failed, status: %s, remote port: %d, domain: %s", accept.Status, forward.RemotePort, accept.Domain)
+			}
+
+			logger.InfoF("Forward success, remote port: %d, domain: %s", forward.RemotePort, accept.Domain)
+
 			for {
-				p, buf, err := packet.ReadMsg(rConn)
+				exchange, err := protocol.ReadExchangeMsg(rConn)
 				if err != nil {
-					logger.ErrorF("Error reading from connection: %v", err) // FIXME: if connection timeout, will cause error
-					return
+					logger.FatalF("Error read exchange msg from remote: %v", err)
 				}
 
-				if p == packet.Accept {
-					msg := &packet.MsgAccept{}
-					if err := json.Unmarshal(buf, msg); err != nil {
-						logger.ErrorF("Error unmarshal msg: %v", err)
-						return
-					}
-
-					if c.tokenCheck(msg.Token) {
-						logger.FatalF("Token not match: [%s]", msg.Token)
-						return
-					}
-
-					if msg.Status != "success" {
-						logger.FatalF("Forward failed, status: %s, remote port: %d, domain: %s", msg.Status, forward.RemotePort, msg.Domain)
-						return
-					}
-
-					logger.InfoF("Forward success, remote port: %d, domain: %s", forward.RemotePort, msg.Domain)
-					continue
+				if c.tokenCheck(exchange.Token) {
+					logger.FatalF("Exchange msg token not match: [%s]", exchange.Token)
 				}
 
-				if p != packet.Exchange {
-					logger.ErrorF("Unexpected packet type: %v", p)
-					return
-				}
-
-				msg := &packet.MsgExchang{}
-				if err := json.Unmarshal(buf, msg); err != nil {
-					logger.ErrorF("Error unmarshal msg: %v", err)
-					return
-				}
-
-				if c.tokenCheck(msg.Token) {
-					logger.FatalF("Token not match: [%s]", msg.Token)
-					return
-				}
-
-				logger.Debug("Receive req from server, start proxying")
-				nRonn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
+				logger.InfoF("Receive user req from server, start proxying, conn_id: %s", exchange.ConnId)
+				nRconn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
 				if err != nil {
 					logger.ErrorF("Error connecting to remote: %v", err)
 					return
@@ -90,18 +72,18 @@ func (c *Client) Run() {
 
 				lConn, err := net.Dial("tcp", fmt.Sprintf(":%d", forward.LocalPort))
 				if err != nil {
-					logger.ErrorF("Error connecting to local: %v", err)
-					if err := packet.Cancel.Send(nRonn, buildMsg(packet.Cancel, c.cfg, forward)...); err != nil {
-						logger.FatalF("Error writing to remote: %v, to close proxy, port: %d", err, forward.LocalPort)
+					logger.ErrorF("Error connecting to local: %v, will close proxy, port: %d", err, forward.LocalPort)
+					if err := protocol.SendCancelMsg(rConn, c.cfg.Token, forward.ProxyName, forward.RemotePort); err != nil {
+						logger.FatalF("Error sending cancel msg to remote: %v, to close proxy, port: %d", err, forward.LocalPort)
 					}
 					return
 				}
 
 				go func() {
-					if err := packet.Exchange.Send(nRonn, c.cfg.Token, msg.ConnId); err != nil {
-						logger.InfoF("Error writing to remote: %v", err)
+					if err := protocol.SendExchangeMsg(nRconn, c.cfg.Token, exchange.ConnId); err != nil {
+						logger.InfoF("Error sending exchange msg to remote: %v", err)
 					}
-					proxy.P(lConn, nRonn)
+					proxy.P(lConn, nRconn)
 				}()
 			}
 		}()
@@ -112,25 +94,15 @@ func (c *Client) Run() {
 
 func (c *Client) CancelForward() {
 	for _, forward := range c.cfg.Forwards {
-		nRonn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
+		nRconn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
 		if err != nil {
 			logger.FatalF("Error connecting to remote: %v", err)
 		}
-		if err := packet.Cancel.Send(nRonn, buildMsg(packet.Cancel, c.cfg, forward)...); err != nil {
-			logger.FatalF("Error writing to remote: %v", err)
+		if err := protocol.SendCancelMsg(nRconn, c.cfg.Token, forward.ProxyName, forward.RemotePort); err != nil {
+			logger.FatalF("Error sending cancel msg to remote: %v", err)
 		}
 		logger.InfoF("Close connection to server, remote port: %d", forward.RemotePort)
 	}
-}
-
-func buildMsg(t packet.PacketType, cfg Config, f Forward) []interface{} {
-	switch t {
-	case packet.Forward:
-		return []interface{}{cfg.Token, f.ProxyName, f.RemotePort, f.SubDomain}
-	case packet.Cancel:
-		return []interface{}{cfg.Token, f.ProxyName, f.RemotePort}
-	}
-	return nil
 }
 
 func (c *Client) tokenCheck(r string) bool {

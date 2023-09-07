@@ -28,7 +28,9 @@ func parseConfig(cfgFile string) Config {
 	}
 
 	var cfg Config
-	toml.Unmarshal(data, &cfg)
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		logger.FatalF("Error parsing config file: %v", err)
+	}
 
 	return cfg
 }

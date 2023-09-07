@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+const connIdLen = 8
+
 type ConnMap struct {
 	conns map[string]net.Conn
 

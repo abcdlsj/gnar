@@ -3,11 +3,11 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/abcdlsj/pipe/protocol"
 	"net"
 	"sync"
 
 	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/packet"
 	"github.com/abcdlsj/pipe/proxy"
 	"github.com/google/uuid"
 )
@@ -54,31 +54,27 @@ func (s *Server) Run() {
 	}
 }
 
-func (s *Server) checkToken(token string) bool {
-	return s.cfg.Token != "" && s.cfg.Token != token
-}
-
 func (s *Server) handle(conn net.Conn) {
-	pt, buf, err := packet.ReadMsg(conn)
+	pt, buf, err := protocol.ReadMsg(conn)
 	if err != nil {
 		logger.ErrorF("Error reading from connection: %v", err)
 		return
 	}
 
 	switch pt {
-	case packet.Forward:
+	case protocol.Forward:
 		failChan := make(chan struct{})
 		defer close(failChan)
 
 		go func() {
 			defer conn.Close()
 			<-failChan
-			if err := packet.Accept.Send(conn, s.cfg.Token, "", "failed"); err != nil {
+			if err := protocol.SendAcceptMsg(conn, s.cfg.Token, "", "failed"); err != nil {
 				logger.ErrorF("Error sending accept message: %v", err)
 			}
 		}()
 
-		msg := &packet.MsgForward{}
+		msg := &protocol.MsgForward{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
@@ -90,8 +86,8 @@ func (s *Server) handle(conn net.Conn) {
 		}
 
 		s.handleForward(conn, msg, failChan)
-	case packet.Exchange:
-		msg := &packet.MsgExchang{}
+	case protocol.Exchange:
+		msg := &protocol.MsgExchang{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
@@ -101,8 +97,8 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 		s.handleExchange(conn, msg)
-	case packet.Cancel:
-		msg := &packet.MsgCancel{}
+	case protocol.Cancel:
+		msg := &protocol.MsgCancel{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
@@ -115,14 +111,14 @@ func (s *Server) handle(conn net.Conn) {
 	}
 }
 
-func (s *Server) handleCancel(msg *packet.MsgCancel) {
+func (s *Server) handleCancel(msg *protocol.MsgCancel) {
 	s.delForward(msg.RemotePort)
 	logger.InfoF("Cancel port %d forward", msg.RemotePort)
 }
 
-func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgForward, failChan chan struct{}) {
+func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failChan chan struct{}) {
 	uPort := msg.RemotePort
-	if isInvaliedPort(uPort) {
+	if isInvalidPort(uPort) {
 		logger.ErrorF("Invalid forward to port: %d", uPort)
 		failChan <- struct{}{}
 		return
@@ -138,21 +134,21 @@ func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgForward, failC
 
 	logger.InfoF("Listening on forwarding port %d", uPort)
 	s.addForward(Forward{
-		From:      commuConn.RemoteAddr().String(),
+		From:      cConn.RemoteAddr().String(),
 		To:        uPort,
 		uListener: uListener,
 		SubDomain: msg.SubDomain,
 	})
 
-	logger.InfoF("Forward from %s to port %d", commuConn.RemoteAddr().String(), uPort)
-	logger.DebugF("Send accept message to client: %s", commuConn.RemoteAddr().String())
+	logger.InfoF("Forward from %s to port %d", cConn.RemoteAddr().String(), uPort)
+	logger.DebugF("Send accept message to client: %s", cConn.RemoteAddr().String())
 
 	domain := fmt.Sprintf("%s.%s", msg.SubDomain, s.cfg.Domain)
 	if !s.cfg.DomainTunnel {
 		domain = ""
 	}
 
-	if err := packet.Accept.Send(commuConn, s.cfg.Token, domain, "success"); err != nil {
+	if err := protocol.SendAcceptMsg(cConn, s.cfg.Token, domain, "success"); err != nil {
 		logger.ErrorF("Error sending accept message: %v", err)
 		return
 	}
@@ -164,17 +160,17 @@ func (s *Server) handleForward(commuConn net.Conn, msg *packet.MsgForward, failC
 		}
 		logger.DebugF("Accept new user connection: %s", userConn.RemoteAddr().String())
 		go func() {
-			cid := uuid.NewString()[:packet.Len-1]
-			s.addUserConn(cid, userConn)
-			if err := packet.Exchange.Send(commuConn, s.cfg.Token, cid); err != nil {
-				logger.ErrorF("Error sending message: %v", err)
+			cid := uuid.NewString()[:connIdLen]
+			s.addUserConn(cid, userConn) // FIXME: if don't remove, maybe will cause memory leak
+			if err := protocol.SendExchangeMsg(cConn, s.cfg.Token, cid); err != nil {
+				logger.ErrorF("Error sending exchange message: %v", err)
 			}
-			logger.DebugF("Send new connection id: %s", cid)
+			logger.DebugF("Send new user connection id: %s", cid)
 		}()
 	}
 }
 
-func (s *Server) handleExchange(conn net.Conn, msg *packet.MsgExchang) {
+func (s *Server) handleExchange(conn net.Conn, msg *protocol.MsgExchang) {
 	logger.DebugF("Receive message from client: %s", msg.ConnId)
 	uConn, ok := s.getUserConn(msg.ConnId)
 	if !ok {
@@ -185,7 +181,7 @@ func (s *Server) handleExchange(conn net.Conn, msg *packet.MsgExchang) {
 	s.metric(proxy.P(conn, uConn))
 }
 
-func isInvaliedPort(port int) bool {
+func isInvalidPort(port int) bool {
 	return port < 0 || port > 65535
 }
 
@@ -245,4 +241,8 @@ func (s *Server) metric(t proxy.Traffic) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	s.traffics = append(s.traffics, t)
+}
+
+func (s *Server) checkToken(token string) bool {
+	return s.cfg.Token != "" && s.cfg.Token != token
 }

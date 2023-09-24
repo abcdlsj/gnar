@@ -24,11 +24,11 @@ func init() {
 }
 
 var (
-	DEBUG_PREFIX = cr.PCyan("DEBUG") + " "
+	DEBUG_PREFIX = cr.PCyan("DBG") + " "
 	INFO_PREFIX  = cr.PGreen("INF") + " "
-	WARN_PREFIX  = cr.PYellow("WARN") + " "
+	WARN_PREFIX  = cr.PYellow("WAR") + " "
 	ERROR_PREFIX = cr.PRed("ERR") + " "
-	FATAL_PREFIX = cr.PRedBgWhite("FATAL") + " "
+	FATAL_PREFIX = cr.PRedBgWhite("FAT") + " "
 )
 
 var globalLevel = INFO
@@ -91,4 +91,9 @@ func Error(v ...interface{}) {
 
 func FatalF(format string, v ...interface{}) {
 	log.Default().Fatalf(FATAL_PREFIX+format, v...)
+}
+
+func Fatal(v ...interface{}) {
+	v = append([]interface{}{FATAL_PREFIX}, v...)
+	log.Default().Fatal(v...)
 }

@@ -1,5 +1,6 @@
 .envrc
 *.patch
+.idea/
 
 # binary
 pipe

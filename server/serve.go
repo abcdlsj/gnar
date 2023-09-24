@@ -69,7 +69,7 @@ func (s *Server) handle(conn net.Conn) {
 		go func() {
 			defer conn.Close()
 			<-failChan
-			if err := protocol.SendAcceptMsg(conn, s.cfg.Token, "", "failed"); err != nil {
+			if err := protocol.NewMsgAccept(s.cfg.Token, "", "failed").Send(conn); err != nil {
 				logger.ErrorF("Error sending accept message: %v", err)
 			}
 		}()
@@ -87,7 +87,7 @@ func (s *Server) handle(conn net.Conn) {
 
 		s.handleForward(conn, msg, failChan)
 	case protocol.Exchange:
-		msg := &protocol.MsgExchang{}
+		msg := &protocol.MsgExchange{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
@@ -113,7 +113,7 @@ func (s *Server) handle(conn net.Conn) {
 
 func (s *Server) handleCancel(msg *protocol.MsgCancel) {
 	s.delForward(msg.RemotePort)
-	logger.InfoF("Cancel port %d forward", msg.RemotePort)
+	logger.InfoF("Forward port %d canceled", msg.RemotePort)
 }
 
 func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failChan chan struct{}) {
@@ -140,15 +140,15 @@ func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failCha
 		SubDomain: msg.SubDomain,
 	})
 
-	logger.InfoF("Forward from %s to port %d", cConn.RemoteAddr().String(), uPort)
-	logger.DebugF("Send accept message to client: %s", cConn.RemoteAddr().String())
+	logger.InfoF("Receive forward from %s to port %d", cConn.RemoteAddr().String(), uPort)
+	logger.InfoF("Send accept msg to client: %s", cConn.RemoteAddr().String())
 
 	domain := fmt.Sprintf("%s.%s", msg.SubDomain, s.cfg.Domain)
 	if !s.cfg.DomainTunnel {
 		domain = ""
 	}
 
-	if err := protocol.SendAcceptMsg(cConn, s.cfg.Token, domain, "success"); err != nil {
+	if err = protocol.NewMsgAccept(s.cfg.Token, domain, "success").Send(cConn); err != nil {
 		logger.ErrorF("Error sending accept message: %v", err)
 		return
 	}
@@ -162,7 +162,7 @@ func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failCha
 		go func() {
 			cid := uuid.NewString()[:connIdLen]
 			s.addUserConn(cid, userConn) // FIXME: if don't remove, maybe will cause memory leak
-			if err := protocol.SendExchangeMsg(cConn, s.cfg.Token, cid); err != nil {
+			if err := protocol.NewMsgExchange(s.cfg.Token, cid).Send(cConn); err != nil {
 				logger.ErrorF("Error sending exchange message: %v", err)
 			}
 			logger.DebugF("Send new user connection id: %s", cid)
@@ -170,7 +170,7 @@ func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failCha
 	}
 }
 
-func (s *Server) handleExchange(conn net.Conn, msg *protocol.MsgExchang) {
+func (s *Server) handleExchange(conn net.Conn, msg *protocol.MsgExchange) {
 	logger.DebugF("Receive message from client: %s", msg.ConnId)
 	uConn, ok := s.getUserConn(msg.ConnId)
 	if !ok {
@@ -231,7 +231,7 @@ func (s *Server) delForward(to int) {
 				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.SubDomain, ff.To))
 			}
 			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)
-			logger.InfoF("Cancel forward from %s to port %d", ff.From, ff.To)
+			logger.InfoF("Receive cancel forward from %s to port %d", ff.From, ff.To)
 			return
 		}
 	}

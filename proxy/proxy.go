@@ -68,7 +68,7 @@ func CalculateBandwidth(traffics []Traffic) (string, string, string) {
 	for _, t := range traffics {
 		upBytes += t.up
 		dnBytes += t.dn
-		sumElapsedNano += (t.et - t.st)
+		sumElapsedNano += t.et - t.st
 	}
 
 	avgElapsedTime := float64(sumElapsedNano) / float64(len(traffics)) // nanosecond

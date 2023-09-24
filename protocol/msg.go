@@ -3,217 +3,176 @@ package protocol
 import (
 	"encoding/json"
 	"io"
-
-	"github.com/abcdlsj/pipe/logger"
 )
 
-type IMsg interface{}
+type Msg interface {
+	Send(io.Writer) error
+	Recv(io.Reader) error
+	Unmarshal([]byte) error
+	Marshal() ([]byte, error)
+}
 
-type AuthMsg struct {
+type MetaMsg struct {
 	Token string `json:"token"`
 }
 
+func newMetaMsg(token string) MetaMsg {
+	return MetaMsg{
+		Token: token,
+	}
+}
+
 type MsgForward struct {
-	AuthMsg
+	MetaMsg
+	RemotePort int    `json:"remote_port"`
 	ProxyName  string `json:"proxy_name"`
 	SubDomain  string `json:"subdomain"`
-	RemotePort int    `json:"remote_port"`
 }
 
-func SendForwardMsg(w io.Writer, token, proxyName, subdomain string, remotePort int) error {
-	return sendMsg(w, Forward,
-		MsgForward{
-			AuthMsg: AuthMsg{
-				Token: token,
-			},
-			ProxyName:  proxyName,
-			RemotePort: remotePort,
-			SubDomain:  subdomain,
-		})
+func (m *MsgForward) Send(w io.Writer) error {
+	return sendMsg(w, Forward, m)
 }
 
-func ReadForwardMsg(r io.Reader) (MsgForward, error) {
-	msg := MsgForward{}
-
-	p, buf, err := ReadMsg(r)
+func (m *MsgForward) Recv(r io.Reader) error {
+	p, buf, err := readMsg(r)
 	if err != nil {
-		return msg, err
+		return err
 	}
 	if p != Forward {
-		return msg, ErrInvalidMsg
+		return ErrInvalidMsg
 	}
-	if err := json.Unmarshal(buf, &msg); err != nil {
-		return msg, err
-	}
+	return m.Unmarshal(buf)
+}
 
-	return msg, nil
+func (m *MsgForward) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, m)
+}
+
+func (m *MsgForward) Marshal() ([]byte, error) {
+	return json.Marshal(m)
+}
+
+func NewMsgForward(token, proxyName, subdomain string, remotePort int) *MsgForward {
+	return &MsgForward{
+		MetaMsg:    newMetaMsg(token),
+		ProxyName:  proxyName,
+		SubDomain:  subdomain,
+		RemotePort: remotePort,
+	}
 }
 
 type MsgAccept struct {
-	AuthMsg
+	MetaMsg
 	Domain string `json:"domain"`
 	Status string `json:"status"`
 }
 
-func SendAcceptMsg(w io.Writer, token, domain, status string) error {
-	return sendMsg(w, Accept, MsgAccept{
-		AuthMsg: AuthMsg{
-			Token: token,
-		},
-		Domain: domain,
-		Status: status,
-	})
+func NewMsgAccept(token, domain, status string) *MsgAccept {
+	return &MsgAccept{
+		MetaMsg: newMetaMsg(token),
+		Domain:  domain,
+		Status:  status,
+	}
 }
 
-func ReadAccpetMsg(r io.Reader) (MsgAccept, error) {
-	msg := MsgAccept{}
+func (m *MsgAccept) Send(w io.Writer) error {
+	return sendMsg(w, Accept, m)
+}
 
-	p, buf, err := ReadMsg(r)
+func (m *MsgAccept) Recv(r io.Reader) error {
+	p, buf, err := readMsg(r)
 	if err != nil {
-		return msg, err
+		return err
 	}
 	if p != Accept {
-		return msg, ErrInvalidMsg
-	}
-	if err := json.Unmarshal(buf, &msg); err != nil {
-		return msg, err
+		return ErrInvalidMsg
 	}
 
-	return msg, nil
+	return m.Unmarshal(buf)
 }
 
-type MsgExchang struct {
-	AuthMsg
+func (m *MsgAccept) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, m)
+}
+
+func (m *MsgAccept) Marshal() ([]byte, error) {
+	return json.Marshal(m)
+}
+
+type MsgExchange struct {
+	MetaMsg
 	ConnId string `json:"conn_id"`
 }
 
-func SendExchangeMsg(w io.Writer, token, connId string) error {
-	return sendMsg(w, Exchange, MsgExchang{
-		AuthMsg: AuthMsg{
-			Token: token,
-		},
-		ConnId: connId,
-	})
+func (m *MsgExchange) Send(w io.Writer) error {
+	return sendMsg(w, Exchange, m)
 }
 
-func ReadExchangeMsg(r io.Reader) (MsgExchang, error) {
-	msg := MsgExchang{}
-
-	p, buf, err := ReadMsg(r)
+func (m *MsgExchange) Recv(r io.Reader) error {
+	p, buf, err := readMsg(r)
 	if err != nil {
-		return msg, err
+		return err
 	}
 	if p != Exchange {
-		return msg, ErrInvalidMsg
+		return ErrInvalidMsg
 	}
-	if err := json.Unmarshal(buf, &msg); err != nil {
-		return msg, err
-	}
+	return m.Unmarshal(buf)
+}
 
-	return msg, nil
+func (m *MsgExchange) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, m)
+}
+
+func (m *MsgExchange) Marshal() ([]byte, error) {
+	return json.Marshal(m)
+}
+
+func NewMsgExchange(token, connId string) *MsgExchange {
+	return &MsgExchange{
+		MetaMsg: newMetaMsg(token),
+		ConnId:  connId,
+	}
 }
 
 type MsgCancel struct {
-	AuthMsg
+	MetaMsg
 	ProxyName  string `json:"proxy_name"`
 	RemotePort int    `json:"remote_port"`
 }
 
-func SendCancelMsg(w io.Writer, token, proxyName string, remotePort int) error {
-	return sendMsg(w, Cancel, MsgCancel{
-		AuthMsg: AuthMsg{
+func NewMsgCancel(token, proxyName string, remotePort int) *MsgCancel {
+	return &MsgCancel{
+		MetaMsg: MetaMsg{
 			Token: token,
 		},
 		ProxyName:  proxyName,
 		RemotePort: remotePort,
-	})
+	}
 }
 
-func ReadCancelMsg(r io.Reader) (MsgCancel, error) {
-	msg := MsgCancel{}
-
-	p, buf, err := ReadMsg(r)
-	if err != nil {
-		return msg, err
-	}
-	if p != Cancel {
-		return msg, ErrInvalidMsg
-	}
-	if err := json.Unmarshal(buf, &msg); err != nil {
-		return msg, err
-	}
-
-	return msg, nil
+func (m *MsgCancel) Send(w io.Writer) error {
+	return sendMsg(w, Cancel, m)
 }
 
-type MsgNope struct {
-	AuthMsg
-}
-
-func sendMsg(w io.Writer, typ PacketType, msg IMsg) error {
-	buf, err := packet(typ, msg)
+func (m *MsgCancel) Recv(r io.Reader) error {
+	p, buf, err := readMsg(r)
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(buf)
-	logger.DebugF("Send [%s] msg: [%v]", typ, buf)
-	return err
+	if p != Cancel {
+		return ErrInvalidMsg
+	}
+	return m.Unmarshal(buf)
 }
 
-func packet(typ PacketType, msg IMsg) ([]byte, error) {
-	buf, err := json.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-	return packet0(typ, buf)
+func (m *MsgCancel) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, m)
 }
 
-func packet0(typ PacketType, buf []byte) ([]byte, error) {
-	if len(buf) > 65535 {
-		return nil, ErrMsgLength
-	}
-	ret := make([]byte, 3+len(buf))
-	ret[0] = byte(typ)
-	ret[1] = byte(len(buf) >> 8)
-	ret[2] = byte(len(buf))
-	copy(ret[3:], buf)
-	return ret, nil
+func (m *MsgCancel) Marshal() ([]byte, error) {
+	return json.Marshal(m)
 }
 
 func ReadMsg(r io.Reader) (PacketType, []byte, error) {
-	typ, buf, err := readMsg(r)
-	if err != nil {
-		return Unknown, nil, err
-	}
-	return PacketType(typ), buf, nil
-}
-
-func readMsg(r io.Reader) (typ byte, buf []byte, err error) {
-	buf = make([]byte, 1)
-	_, err = r.Read(buf)
-	if err != nil {
-		return
-	}
-
-	typ = buf[0]
-
-	buf = make([]byte, 2)
-	_, err = r.Read(buf)
-	if err != nil {
-		err = ErrMsgRead
-		return
-	}
-	len := int(buf[0])<<8 + int(buf[1])
-	buf = make([]byte, len)
-	n, err := io.ReadFull(r, buf)
-	if err != nil {
-		return
-	}
-
-	if n != len {
-		err = ErrMsgLength
-		return
-	}
-
-	return
+	return readMsg(r)
 }

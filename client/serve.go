@@ -30,10 +30,10 @@ func (c *Client) Run() {
 
 	for _, forward := range c.cfg.Forwards {
 		c.wg.Add(1)
-		go func() {
+		go func(f Forward) {
 			defer c.wg.Done()
-			c.Handle(forward)
-		}()
+			c.Handle(f)
+		}(forward)
 	}
 
 	c.wait()

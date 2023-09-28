@@ -2,44 +2,19 @@ package protocol
 
 import (
 	"encoding/json"
-	"github.com/abcdlsj/pipe/logger"
 	"io"
 )
 
 type PacketType byte
 
 var (
-	Unknown             = PacketType(0x00)
-	Forward  PacketType = PacketType(0x01)
-	Accept   PacketType = PacketType(0x02)
-	Exchange PacketType = PacketType(0x03)
-	Cancel   PacketType = PacketType(0x04)
+	Unknown                = PacketType(0x00)
+	Heartbeat              = PacketType(0x01)
+	Forward     PacketType = PacketType(0x02)
+	ForwardResp PacketType = PacketType(0x03)
+	Exchange    PacketType = PacketType(0x04)
+	Cancel      PacketType = PacketType(0x05)
 )
-
-func (p PacketType) String() string {
-	switch p {
-	case Forward:
-		return "forward"
-	case Accept:
-		return "accept"
-	case Exchange:
-		return "exchange"
-	case Cancel:
-		return "cancel"
-	default:
-		return "unknown"
-	}
-}
-
-func sendMsg(w io.Writer, typ PacketType, msg Msg) error {
-	buf, err := packet(typ, msg)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(buf)
-	logger.DebugF("[Protocol] Send [%s] msg: [%v]", typ, msg)
-	return err
-}
 
 func packet(typ PacketType, msg Msg) ([]byte, error) {
 	buf, err := json.Marshal(msg)
@@ -61,12 +36,11 @@ func packet0(typ PacketType, buf []byte) ([]byte, error) {
 	return ret, nil
 }
 
-func readMsg(r io.Reader) (PacketType, []byte, error) {
+func read(r io.Reader) (PacketType, []byte, error) {
 	typ, buf, err := read0(r)
 	if err != nil {
 		return Unknown, nil, err
 	}
-	logger.DebugF("[Protocol] Receive [%s] msg: [%v]", PacketType(typ), buf)
 	return PacketType(typ), buf, nil
 }
 

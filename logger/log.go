@@ -17,10 +17,14 @@ const (
 	FATAL
 )
 
+var defaultLogger *log.Logger
+
 func init() {
 	if os.Getenv("DEBUG") != "" {
 		SetLevel(DEBUG)
 	}
+
+	defaultLogger = log.New(os.Stderr, "", log.LstdFlags)
 }
 
 var (
@@ -39,61 +43,61 @@ func SetLevel(level Level) {
 
 func DebugF(format string, v ...interface{}) {
 	if globalLevel <= DEBUG {
-		log.Default().Printf(DEBUG_PREFIX+format, v...)
+		defaultLogger.Printf(DEBUG_PREFIX+format, v...)
 	}
 }
 
 func InfoF(format string, v ...interface{}) {
 	if globalLevel <= INFO {
-		log.Default().Printf(INFO_PREFIX+format, v...)
+		defaultLogger.Printf(INFO_PREFIX+format, v...)
 	}
 }
 
 func WarnF(format string, v ...interface{}) {
 	if globalLevel <= WARN {
-		log.Default().Printf(WARN_PREFIX+format, v...)
+		defaultLogger.Printf(WARN_PREFIX+format, v...)
 	}
 }
 
 func ErrorF(format string, v ...interface{}) {
 	if globalLevel <= ERROR {
-		log.Default().Printf(ERROR_PREFIX+format, v...)
+		defaultLogger.Printf(ERROR_PREFIX+format, v...)
 	}
 }
 
 func Debug(v ...interface{}) {
 	if globalLevel <= DEBUG {
 		v = append([]interface{}{DEBUG_PREFIX}, v...)
-		log.Default().Print(v...)
+		defaultLogger.Print(v...)
 	}
 }
 
 func Info(v ...interface{}) {
 	if globalLevel <= INFO {
 		v = append([]interface{}{INFO_PREFIX}, v...)
-		log.Default().Print(v...)
+		defaultLogger.Print(v...)
 	}
 }
 
 func Warn(v ...interface{}) {
 	if globalLevel <= WARN {
 		v = append([]interface{}{WARN_PREFIX}, v...)
-		log.Default().Print(v...)
+		defaultLogger.Print(v...)
 	}
 }
 
 func Error(v ...interface{}) {
 	if globalLevel <= ERROR {
 		v = append([]interface{}{ERROR_PREFIX}, v...)
-		log.Default().Print(v...)
+		defaultLogger.Print(v...)
 	}
 }
 
 func FatalF(format string, v ...interface{}) {
-	log.Default().Fatalf(FATAL_PREFIX+format, v...)
+	defaultLogger.Fatalf(FATAL_PREFIX+format, v...)
 }
 
 func Fatal(v ...interface{}) {
 	v = append([]interface{}{FATAL_PREFIX}, v...)
-	log.Default().Fatal(v...)
+	defaultLogger.Fatal(v...)
 }

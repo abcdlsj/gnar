@@ -3,9 +3,11 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/abcdlsj/pipe/protocol"
 	"net"
 	"sync"
+	"time"
+
+	"github.com/abcdlsj/pipe/protocol"
 
 	"github.com/abcdlsj/pipe/logger"
 	"github.com/abcdlsj/pipe/proxy"
@@ -13,10 +15,11 @@ import (
 )
 
 type Server struct {
-	cfg      Config
-	connMap  ConnMap
-	forwards []Forward
-	traffics []proxy.Traffic
+	cfg         Config
+	connMap     ConnMap
+	forwards    []Forward
+	traffics    []proxy.Traffic
+	portManager map[int]bool
 
 	m sync.RWMutex
 }
@@ -25,8 +28,9 @@ func newServer(cfg Config) *Server {
 	return &Server{
 		cfg: cfg,
 		connMap: ConnMap{
-			conns: make(map[string]net.Conn),
+			conns: make(map[string]Conn),
 		},
+		portManager: make(map[int]bool),
 	}
 }
 
@@ -55,7 +59,7 @@ func (s *Server) Run() {
 }
 
 func (s *Server) handle(conn net.Conn) {
-	pt, buf, err := protocol.ReadMsg(conn)
+	pt, buf, err := protocol.Read(conn)
 	if err != nil {
 		logger.ErrorF("Error reading from connection: %v", err)
 		return
@@ -69,8 +73,8 @@ func (s *Server) handle(conn net.Conn) {
 		go func() {
 			defer conn.Close()
 			<-failChan
-			if err := protocol.NewMsgAccept(s.cfg.Token, "", "failed").Send(conn); err != nil {
-				logger.ErrorF("Error sending accept message: %v", err)
+			if err := protocol.NewMsgForwardResp(s.cfg.Token, "", "failed").Send(conn); err != nil {
+				logger.ErrorF("Error sending forward failed resp message: %v", err)
 			}
 		}()
 
@@ -79,7 +83,7 @@ func (s *Server) handle(conn net.Conn) {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
 		}
-		if s.checkToken(msg.Token) {
+		if !s.sameToken(msg.Token) {
 			logger.WarnF("Receive new forward request, token not match: [%s]", msg.Token)
 			failChan <- struct{}{}
 			return
@@ -92,7 +96,7 @@ func (s *Server) handle(conn net.Conn) {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
 		}
-		if s.checkToken(msg.Token) {
+		if !s.sameToken(msg.Token) {
 			logger.WarnF("Receive exchange request, token not match: [%s]", msg.Token)
 			return
 		}
@@ -103,7 +107,7 @@ func (s *Server) handle(conn net.Conn) {
 			logger.ErrorF("Error unmarshalling message: %v", err)
 			return
 		}
-		if s.checkToken(msg.Token) {
+		if !s.sameToken(msg.Token) {
 			logger.WarnF("Receive cancel request, token not match: [%s]", msg.Token)
 			return
 		}
@@ -118,7 +122,7 @@ func (s *Server) handleCancel(msg *protocol.MsgCancel) {
 
 func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failChan chan struct{}) {
 	uPort := msg.RemotePort
-	if isInvalidPort(uPort) {
+	if !s.availablePort(uPort) {
 		logger.ErrorF("Invalid forward to port: %d", uPort)
 		failChan <- struct{}{}
 		return
@@ -141,27 +145,40 @@ func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failCha
 	})
 
 	logger.InfoF("Receive forward from %s to port %d", cConn.RemoteAddr().String(), uPort)
-	logger.InfoF("Send accept msg to client: %s", cConn.RemoteAddr().String())
+	logger.InfoF("Send forward accept msg to client: %s", cConn.RemoteAddr().String())
 
 	domain := fmt.Sprintf("%s.%s", msg.SubDomain, s.cfg.Domain)
 	if !s.cfg.DomainTunnel {
 		domain = ""
 	}
 
-	if err = protocol.NewMsgAccept(s.cfg.Token, domain, "success").Send(cConn); err != nil {
-		logger.ErrorF("Error sending accept message: %v", err)
+	if err = protocol.NewMsgForwardResp(s.cfg.Token, domain, "success").Send(cConn); err != nil {
+		logger.ErrorF("Error sending forward accept message: %v", err)
+		failChan <- struct{}{}
 		return
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if err := protocol.NewMsgHeartbeat(s.cfg.Token).Send(cConn); err != nil {
+				logger.WarnF("Error sending heartbeat message: %v, forward to port: %d", err, uPort)
+				return
+			}
+		}
+	}()
 
 	for {
 		userConn, err := uListener.Accept()
 		if err != nil {
 			return
 		}
-		logger.DebugF("Accept new user connection: %s", userConn.RemoteAddr().String())
+		logger.DebugF("Receive new user connection: %s", userConn.RemoteAddr().String())
 		go func() {
 			cid := uuid.NewString()[:connIdLen]
-			s.addUserConn(cid, userConn) // FIXME: if don't remove, maybe will cause memory leak
+			s.connMap.Add(cid, userConn) // FIXME: if don't remove, maybe will cause memory leak
 			if err := protocol.NewMsgExchange(s.cfg.Token, cid).Send(cConn); err != nil {
 				logger.ErrorF("Error sending exchange message: %v", err)
 			}
@@ -172,37 +189,27 @@ func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failCha
 
 func (s *Server) handleExchange(conn net.Conn, msg *protocol.MsgExchange) {
 	logger.DebugF("Receive message from client: %s", msg.ConnId)
-	uConn, ok := s.getUserConn(msg.ConnId)
+	uConn, ok := s.connMap.Get(msg.ConnId)
 	if !ok {
 		return
 	}
 
-	defer s.delUserConn(msg.ConnId)
+	defer s.connMap.Del(msg.ConnId)
 	s.metric(proxy.P(conn, uConn))
 }
 
-func isInvalidPort(port int) bool {
-	return port < 0 || port > 65535
+func (s *Server) availablePort(port int) bool {
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	return port > 0 && port < 65535 && !s.portManager[port]
 }
 
 type Forward struct {
 	From      string
 	To        int
 	SubDomain string
-
 	uListener net.Listener
-}
-
-func (s *Server) addUserConn(cid string, conn net.Conn) {
-	s.connMap.Add(cid, conn)
-}
-
-func (s *Server) delUserConn(cid string) {
-	s.connMap.Del(cid)
-}
-
-func (s *Server) getUserConn(cid string) (net.Conn, bool) {
-	return s.connMap.Get(cid)
 }
 
 func (s *Server) addForward(f Forward) {
@@ -219,6 +226,7 @@ func (s *Server) addForward(f Forward) {
 	}
 
 	s.forwards = append(s.forwards, f)
+	s.portManager[f.To] = true
 }
 
 func (s *Server) delForward(to int) {
@@ -232,6 +240,7 @@ func (s *Server) delForward(to int) {
 			}
 			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)
 			logger.InfoF("Receive cancel forward from %s to port %d", ff.From, ff.To)
+			s.portManager[ff.To] = false
 			return
 		}
 	}
@@ -243,6 +252,6 @@ func (s *Server) metric(t proxy.Traffic) {
 	s.traffics = append(s.traffics, t)
 }
 
-func (s *Server) checkToken(token string) bool {
-	return s.cfg.Token != "" && s.cfg.Token != token
+func (s *Server) sameToken(token string) bool {
+	return s.cfg.Token == "" || s.cfg.Token == token
 }

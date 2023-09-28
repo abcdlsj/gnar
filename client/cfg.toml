@@ -1,6 +1,6 @@
 server-host = "localhost"
 server-port = 8910 
-# token = "abcdlsj" # optional
+token = "abcdlsj" # optional
 
 [[forwards]]
 proxy-name = "python_http_file_service" # optional

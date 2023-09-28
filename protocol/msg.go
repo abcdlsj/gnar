@@ -3,22 +3,45 @@ package protocol
 import (
 	"encoding/json"
 	"io"
+	"sync"
+
+	"github.com/abcdlsj/pipe/logger"
 )
+
+var globalAuthor Authorizator
 
 type Msg interface {
 	Send(io.Writer) error
 	Recv(io.Reader) error
-	Unmarshal([]byte) error
-	Marshal() ([]byte, error)
+}
+
+type MsgHeartbeat struct {
+	MetaMsg
+}
+
+func NewMsgHeartbeat(token string) *MsgHeartbeat {
+	return &MsgHeartbeat{
+		MetaMsg: newMetaMsg(token),
+	}
+}
+
+func (m *MsgHeartbeat) Send(w io.Writer) error {
+	return sendWith(w, m)
+}
+
+func (m *MsgHeartbeat) Recv(r io.Reader) error {
+	return recvInto(r, m)
 }
 
 type MetaMsg struct {
-	Token string `json:"token"`
+	Token   string `json:"token"`
+	Version string `json:"version"`
 }
 
 func newMetaMsg(token string) MetaMsg {
 	return MetaMsg{
-		Token: token,
+		Token:   token,
+		Version: "0.0.1",
 	}
 }
 
@@ -30,26 +53,11 @@ type MsgForward struct {
 }
 
 func (m *MsgForward) Send(w io.Writer) error {
-	return sendMsg(w, Forward, m)
+	return sendWith(w, m)
 }
 
 func (m *MsgForward) Recv(r io.Reader) error {
-	p, buf, err := readMsg(r)
-	if err != nil {
-		return err
-	}
-	if p != Forward {
-		return ErrInvalidMsg
-	}
-	return m.Unmarshal(buf)
-}
-
-func (m *MsgForward) Unmarshal(buf []byte) error {
-	return json.Unmarshal(buf, m)
-}
-
-func (m *MsgForward) Marshal() ([]byte, error) {
-	return json.Marshal(m)
+	return recvInto(r, m)
 }
 
 func NewMsgForward(token, proxyName, subdomain string, remotePort int) *MsgForward {
@@ -61,42 +69,26 @@ func NewMsgForward(token, proxyName, subdomain string, remotePort int) *MsgForwa
 	}
 }
 
-type MsgAccept struct {
+type MsgForwardResp struct {
 	MetaMsg
 	Domain string `json:"domain"`
 	Status string `json:"status"`
 }
 
-func NewMsgAccept(token, domain, status string) *MsgAccept {
-	return &MsgAccept{
+func NewMsgForwardResp(token, domain, status string) *MsgForwardResp {
+	return &MsgForwardResp{
 		MetaMsg: newMetaMsg(token),
 		Domain:  domain,
 		Status:  status,
 	}
 }
 
-func (m *MsgAccept) Send(w io.Writer) error {
-	return sendMsg(w, Accept, m)
+func (m *MsgForwardResp) Send(w io.Writer) error {
+	return sendWith(w, m)
 }
 
-func (m *MsgAccept) Recv(r io.Reader) error {
-	p, buf, err := readMsg(r)
-	if err != nil {
-		return err
-	}
-	if p != Accept {
-		return ErrInvalidMsg
-	}
-
-	return m.Unmarshal(buf)
-}
-
-func (m *MsgAccept) Unmarshal(buf []byte) error {
-	return json.Unmarshal(buf, m)
-}
-
-func (m *MsgAccept) Marshal() ([]byte, error) {
-	return json.Marshal(m)
+func (m *MsgForwardResp) Recv(r io.Reader) error {
+	return recvInto(r, m)
 }
 
 type MsgExchange struct {
@@ -105,26 +97,11 @@ type MsgExchange struct {
 }
 
 func (m *MsgExchange) Send(w io.Writer) error {
-	return sendMsg(w, Exchange, m)
+	return sendWith(w, m)
 }
 
 func (m *MsgExchange) Recv(r io.Reader) error {
-	p, buf, err := readMsg(r)
-	if err != nil {
-		return err
-	}
-	if p != Exchange {
-		return ErrInvalidMsg
-	}
-	return m.Unmarshal(buf)
-}
-
-func (m *MsgExchange) Unmarshal(buf []byte) error {
-	return json.Unmarshal(buf, m)
-}
-
-func (m *MsgExchange) Marshal() ([]byte, error) {
-	return json.Marshal(m)
+	return recvInto(r, m)
 }
 
 func NewMsgExchange(token, connId string) *MsgExchange {
@@ -151,28 +128,108 @@ func NewMsgCancel(token, proxyName string, remotePort int) *MsgCancel {
 }
 
 func (m *MsgCancel) Send(w io.Writer) error {
-	return sendMsg(w, Cancel, m)
+	return sendWith(w, m)
 }
 
 func (m *MsgCancel) Recv(r io.Reader) error {
-	p, buf, err := readMsg(r)
+	return recvInto(r, m)
+}
+
+func Read(r io.Reader) (PacketType, []byte, error) {
+	return read(r)
+}
+
+func sendWith(w io.Writer, msg Msg) error {
+	buf, err := packet(extractMsgType(msg), msg)
 	if err != nil {
 		return err
 	}
-	if p != Cancel {
+	_, err = w.Write(buf)
+	return err
+}
+
+func recvInto(r io.Reader, msg Msg) error {
+	p, buf, err := read(r)
+	if err != nil {
+		return err
+	}
+
+	if p != extractMsgType(msg) {
 		return ErrInvalidMsg
 	}
-	return m.Unmarshal(buf)
+
+	if err := json.Unmarshal(buf, msg); err != nil {
+		return err
+	}
+
+	meta, err := extractMetaMsg(msg)
+	if err != nil {
+		return err
+	}
+
+	if !globalAuthor.Check(meta.Token) {
+		return ErrInvalidToken
+	}
+
+	return nil
 }
 
-func (m *MsgCancel) Unmarshal(buf []byte) error {
-	return json.Unmarshal(buf, m)
+func extractMsgType(msg Msg) PacketType {
+	switch msg.(type) {
+	case *MsgForward:
+		return Forward
+	case *MsgForwardResp:
+		return ForwardResp
+	case *MsgExchange:
+		return Exchange
+	case *MsgCancel:
+		return Cancel
+	case *MsgHeartbeat:
+		return Heartbeat
+	default:
+		return Unknown
+	}
 }
 
-func (m *MsgCancel) Marshal() ([]byte, error) {
-	return json.Marshal(m)
+func extractMetaMsg(msg Msg) (MetaMsg, error) {
+	switch msg := msg.(type) {
+	case *MsgForward:
+		return msg.MetaMsg, nil
+	case *MsgForwardResp:
+		return msg.MetaMsg, nil
+	case *MsgExchange:
+		return msg.MetaMsg, nil
+	case *MsgCancel:
+		return msg.MetaMsg, nil
+	case *MsgHeartbeat:
+		return msg.MetaMsg, nil
+	default:
+		return newMetaMsg(""), ErrInvalidMsg
+	}
 }
 
-func ReadMsg(r io.Reader) (PacketType, []byte, error) {
-	return readMsg(r)
+type Authorizator struct {
+	token string
+	mu    sync.Mutex
+}
+
+func InitAuthorizator(token string) error {
+	globalAuthor.token = token
+	return nil
+}
+
+func (a *Authorizator) Check(token string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.token == "" {
+		return true
+	}
+
+	if a.token != token {
+		logger.Info("Notice: token authentication failed")
+		return false
+	}
+
+	return true
 }

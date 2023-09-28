@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -27,6 +28,10 @@ func newClient(cfg Config) *Client {
 
 func (c *Client) Run() {
 	go c.signalShutdown()
+
+	if c.cfg.Token != "" {
+		protocol.InitAuthorizator(c.cfg.Token)
+	}
 
 	for _, forward := range c.cfg.Forwards {
 		c.wg.Add(1)
@@ -55,53 +60,72 @@ func (c *Client) Handle(forward Forward) {
 		logger.FatalF("Error send forward msg to remote: %v", err)
 	}
 
-	accept := &protocol.MsgAccept{}
-	if err = accept.Recv(rConn); err != nil {
-		logger.FatalF("Error read accept msg from remote: %v", err)
+	frdResp := &protocol.MsgForwardResp{}
+	if err = frdResp.Recv(rConn); err != nil {
+		logger.FatalF("Error read forward resp msg from remote: %v", err)
 	}
 
-	if c.tokenCheck(accept.Token) {
-		logger.Fatal("Accept msg token not match")
+	if frdResp.Status != "success" {
+		logger.FatalF("Forward failed, status: %s, remote port: %d, domain: %s", frdResp.Status,
+			forward.RemotePort, frdResp.Domain)
 	}
 
-	if accept.Status != "success" {
-		logger.FatalF("Forward failed, status: %s, remote port: %d, domain: %s", accept.Status,
-			forward.RemotePort, accept.Domain)
+	if frdResp.Domain != "" {
+		logger.InfoF("Forward success, remote port: %d, domain: %s", forward.RemotePort, frdResp.Domain)
+	} else {
+		logger.InfoF("Forward success, remote port: %d", forward.RemotePort)
 	}
-
-	logger.InfoF("Forward success, remote port: %d, domain: %s", forward.RemotePort, accept.Domain)
 
 	for {
-		exMsg := &protocol.MsgExchange{}
-		if err = exMsg.Recv(rConn); err != nil {
-			logger.ErrorF("Error read exchange msg from remote: %v", err)
-			return
-		}
-
-		if c.tokenCheck(exMsg.Token) {
-			logger.Fatal("Exchange msg token not match")
-		}
-
-		logger.InfoF("Receive user req from server, start proxying, conn_id: %s", exMsg.ConnId)
-		nRconn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
+		p, buf, err := protocol.Read(rConn)
 		if err != nil {
-			logger.ErrorF("Error connecting to remote: %v", err)
+			logger.ErrorF("Error read msg from remote: %v", err)
 			return
 		}
-
-		lConn, err := net.Dial("tcp", fmt.Sprintf(":%d", forward.LocalPort))
-		if err != nil {
-			logger.ErrorF("Error connecting to local: %v, will close forward, local port: %d", err, forward.LocalPort)
-			c.cancelForward(forward)
-			return
-		}
-
-		go func() {
-			if err = protocol.NewMsgExchange(c.cfg.Token, exMsg.ConnId).Send(nRconn); err != nil {
-				logger.InfoF("Error sending exchange msg to remote: %v", err)
+		switch p {
+		case protocol.Exchange:
+			msg := &protocol.MsgExchange{}
+			if err := json.Unmarshal(buf, msg); err != nil {
+				logger.ErrorF("Error read exchange msg from remote: %v", err)
+				c.cancelForward(forward)
+				return
 			}
-			proxy.P(lConn, nRconn)
-		}()
+
+			logger.InfoF("Receive user req from server, start proxying, conn_id: %s", msg.ConnId)
+			lConn, err := net.Dial("tcp", fmt.Sprintf(":%d", forward.LocalPort))
+			if err != nil {
+				logger.ErrorF("Error connecting to local: %v, will close forward, local port: %d", err, forward.LocalPort)
+				c.cancelForward(forward)
+				return
+			}
+
+			nRconn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
+			if err != nil {
+				logger.ErrorF("Error connecting to remote: %v", err)
+				c.cancelForward(forward)
+				return
+			}
+
+			go func() {
+				if err = protocol.NewMsgExchange(c.cfg.Token, msg.ConnId).Send(nRconn); err != nil {
+					logger.InfoF("Error sending exchange msg to remote: %v", err)
+				}
+				proxy.P(lConn, nRconn)
+			}()
+		case protocol.Heartbeat:
+			msg := &protocol.MsgHeartbeat{}
+			if err := json.Unmarshal(buf, msg); err != nil {
+				logger.ErrorF("Error read heartbeat msg from remote: %v", err)
+				c.cancelForward(forward)
+				return
+			}
+			if !c.sameToken(msg.Token) {
+				logger.ErrorF("Receive heartbeat from server, token not match")
+				c.cancelForward(forward)
+				return
+			}
+			logger.Debug("Receive heartbeat from server")
+		}
 	}
 }
 
@@ -114,10 +138,6 @@ func (c *Client) cancelForward(forward Forward) {
 		logger.FatalF("Error sending cancel msg to remote: %v", err)
 	}
 	logger.InfoF("Close connection to server, local port: %d, remote port: %d", forward.LocalPort, forward.RemotePort)
-}
-
-func (c *Client) tokenCheck(r string) bool {
-	return c.cfg.Token != "" && c.cfg.Token != r
 }
 
 func (c *Client) signalShutdown() {
@@ -133,4 +153,8 @@ func (c *Client) signalShutdown() {
 	}
 
 	os.Exit(1)
+}
+
+func (c *Client) sameToken(token string) bool {
+	return c.cfg.Token == "" || c.cfg.Token == token
 }

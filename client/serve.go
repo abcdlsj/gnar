@@ -9,9 +9,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/abcdlsj/pipe/protocol"
-
 	"github.com/abcdlsj/pipe/logger"
+	"github.com/abcdlsj/pipe/protocol"
 	"github.com/abcdlsj/pipe/proxy"
 )
 

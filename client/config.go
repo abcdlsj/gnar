@@ -16,9 +16,10 @@ type Config struct {
 
 type Forward struct {
 	ProxyName  string `toml:"proxy-name"`
-	SubDomain  string `toml:"subdomain"`
+	Subdomain  string `toml:"subdomain"`
 	RemotePort int    `toml:"remote-port"`
 	LocalPort  int    `toml:"local-port"`
+	Type       string `toml:"type"`
 }
 
 func parseConfig(cfgFile string) Config {

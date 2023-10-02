@@ -6,7 +6,7 @@
 frp-like Tool with AutoHTTPs Subdomain Proxy
 
 Features:
-- [x] Simple implementation with minimal third-party dependencies (core code is shorter than 1000 lines)
+- [x] Simple implementation with minimal third-party dependencies
 - [x] Support for subdomain proxy using Caddy server
 - [x] Can be run via command-line flags or a configuration file
 - [x] Supports forwarding from multiple clients

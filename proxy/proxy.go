@@ -3,7 +3,6 @@ package proxy
 import (
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"time"
 )
@@ -27,7 +26,7 @@ type Traffic struct {
 	et int64
 }
 
-func P(src, dst net.Conn) Traffic {
+func P(src, dst io.ReadWriteCloser) Traffic {
 	defer src.Close()
 	defer dst.Close()
 

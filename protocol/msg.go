@@ -49,7 +49,8 @@ type MsgForward struct {
 	MetaMsg
 	RemotePort int    `json:"remote_port"`
 	ProxyName  string `json:"proxy_name"`
-	SubDomain  string `json:"subdomain"`
+	Subdomain  string `json:"subdomain"`
+	Type       string `json:"type"`
 }
 
 func (m *MsgForward) Send(w io.Writer) error {
@@ -64,7 +65,7 @@ func NewMsgForward(token, proxyName, subdomain string, remotePort int) *MsgForwa
 	return &MsgForward{
 		MetaMsg:    newMetaMsg(token),
 		ProxyName:  proxyName,
-		SubDomain:  subdomain,
+		Subdomain:  subdomain,
 		RemotePort: remotePort,
 	}
 }

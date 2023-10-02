@@ -13,6 +13,7 @@ func Command() *cobra.Command {
 		token     string
 		subdomain string
 		proxyName string
+		typ       string
 
 		cfgFile string
 		flagCfg Config
@@ -27,8 +28,9 @@ func Command() *cobra.Command {
 				flagCfg.Forwards[0] = Forward{
 					LocalPort:  lport,
 					RemotePort: fport,
-					SubDomain:  subdomain,
+					Subdomain:  subdomain,
 					ProxyName:  proxyName,
+					Type:       typ,
 				}
 				flagCfg.SvrHost = shost
 				flagCfg.SvrPort = sport
@@ -48,6 +50,7 @@ func Command() *cobra.Command {
 	cfg.PersistentFlags().StringVarP(&token, "token", "t", "", "token")
 	cfg.PersistentFlags().StringVarP(&subdomain, "subdomain", "d", "", "subdomain")
 	cfg.PersistentFlags().StringVarP(&proxyName, "proxy-name", "n", "", "proxy name")
+	cfg.PersistentFlags().StringVarP(&typ, "type", "y", "tcp", "forward protocol type")
 	cfg.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 
 	return cfg

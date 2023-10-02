@@ -137,16 +137,16 @@ func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failCha
 
 	logger.InfoF("Listening on forwarding port %d", uPort)
 	s.addForward(Forward{
-		From:      cConn.RemoteAddr().String(),
 		To:        uPort,
-		uListener: uListener,
-		SubDomain: msg.SubDomain,
+		From:      cConn.RemoteAddr().String(),
+		Subdomain: msg.Subdomain,
+		listener:  uListener,
 	})
 
 	logger.InfoF("Receive forward from %s to port %d", cConn.RemoteAddr().String(), uPort)
 	logger.InfoF("Send forward accept msg to client: %s", cConn.RemoteAddr().String())
 
-	domain := fmt.Sprintf("%s.%s", msg.SubDomain, s.cfg.Domain)
+	domain := fmt.Sprintf("%s.%s", msg.Subdomain, s.cfg.Domain)
 	if !s.cfg.DomainTunnel {
 		domain = ""
 	}
@@ -205,10 +205,10 @@ func (s *Server) availablePort(port int) bool {
 }
 
 type Forward struct {
-	From      string
 	To        int
-	SubDomain string
-	uListener net.Listener
+	From      string
+	Subdomain string
+	listener  net.Listener
 }
 
 func (s *Server) addForward(f Forward) {
@@ -216,12 +216,12 @@ func (s *Server) addForward(f Forward) {
 	defer s.m.Unlock()
 
 	if s.cfg.DomainTunnel {
-		if f.SubDomain == "" {
-			f.SubDomain = fmt.Sprintf("%s.%s", uuid.NewString()[:7], s.cfg.Domain)
+		if f.Subdomain == "" {
+			f.Subdomain = fmt.Sprintf("%s.%s", uuid.NewString()[:7], s.cfg.Domain)
 		} else {
-			f.SubDomain = fmt.Sprintf("%s.%s", f.SubDomain, s.cfg.Domain)
+			f.Subdomain = fmt.Sprintf("%s.%s", f.Subdomain, s.cfg.Domain)
 		}
-		go addCaddyRouter(f.SubDomain, f.To)
+		go addCaddyRouter(f.Subdomain, f.To)
 	}
 
 	s.forwards = append(s.forwards, f)
@@ -233,9 +233,9 @@ func (s *Server) delForward(to int) {
 	defer s.m.Unlock()
 	for i, ff := range s.forwards {
 		if ff.To == to {
-			ff.uListener.Close()
+			ff.listener.Close()
 			if s.cfg.DomainTunnel {
-				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.SubDomain, ff.To))
+				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.Subdomain, ff.To))
 			}
 			s.forwards = append(s.forwards[:i], s.forwards[i+1:]...)
 			logger.InfoF("Receive cancel forward from %s to port %d", ff.From, ff.To)

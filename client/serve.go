@@ -47,13 +47,17 @@ func (c *Client) wait() {
 	c.wg.Wait()
 }
 
+func (c *Client) newSvrConn() (net.Conn, error) {
+	return net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
+}
+
 func (c *Client) Handle(forward Forward) {
-	rConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
+	rConn, err := c.newSvrConn()
 	if err != nil {
 		logger.FatalF("Error connecting to remote: %v", err)
 	}
 
-	if err = protocol.NewMsgForward(c.cfg.Token, forward.ProxyName, forward.SubDomain,
+	if err = protocol.NewMsgForward(c.cfg.Token, forward.ProxyName, forward.Subdomain,
 		forward.RemotePort).Send(rConn); err != nil {
 
 		logger.FatalF("Error send forward msg to remote: %v", err)
@@ -91,14 +95,14 @@ func (c *Client) Handle(forward Forward) {
 			}
 
 			logger.InfoF("Receive user req from server, start proxying, conn_id: %s", msg.ConnId)
-			lConn, err := net.Dial("tcp", fmt.Sprintf(":%d", forward.LocalPort))
+			lConn, err := net.Dial(forward.Type, fmt.Sprintf(":%d", forward.LocalPort))
 			if err != nil {
 				logger.ErrorF("Error connecting to local: %v, will close forward, local port: %d", err, forward.LocalPort)
 				c.cancelForward(forward)
 				return
 			}
 
-			nRconn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", c.cfg.SvrHost, c.cfg.SvrPort))
+			nRconn, err := c.newSvrConn()
 			if err != nil {
 				logger.ErrorF("Error connecting to remote: %v", err)
 				c.cancelForward(forward)

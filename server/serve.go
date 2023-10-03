@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -15,7 +16,8 @@ import (
 
 type Server struct {
 	cfg         Config
-	connMap     ConnMap
+	tcpConnMap  TCPConnMap
+	udpConnMap  UDPConnMap
 	forwards    []Forward
 	traffics    []proxy.Traffic
 	portManager map[int]bool
@@ -26,8 +28,11 @@ type Server struct {
 func newServer(cfg Config) *Server {
 	return &Server{
 		cfg: cfg,
-		connMap: ConnMap{
-			conns: make(map[string]Conn),
+		tcpConnMap: TCPConnMap{
+			conns: make(map[string]TCPConn),
+		},
+		udpConnMap: UDPConnMap{
+			conns: make(map[string]*net.UDPConn),
 		},
 		portManager: make(map[int]bool),
 	}
@@ -37,6 +42,8 @@ func (s *Server) Run() {
 	if s.cfg.AdminPort != 0 {
 		go s.startAdmin()
 	}
+
+	go s.tcpConnMap.StartAutoExpire()
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.Port))
 	if err != nil {
@@ -70,7 +77,6 @@ func (s *Server) handle(conn net.Conn) {
 		defer close(failChan)
 
 		go func() {
-			defer conn.Close()
 			<-failChan
 			if err := protocol.NewMsgForwardResp(s.cfg.Token, "", "failed").Send(conn); err != nil {
 				logger.ErrorF("Error sending forward failed resp message: %v", err)
@@ -101,6 +107,7 @@ func (s *Server) handle(conn net.Conn) {
 		}
 		s.handleExchange(conn, msg)
 	case protocol.Cancel:
+		defer conn.Close()
 		msg := &protocol.MsgCancel{}
 		if err := json.Unmarshal(buf, msg); err != nil {
 			logger.ErrorF("Error unmarshalling message: %v", err)
@@ -127,74 +134,139 @@ func (s *Server) handleForward(cConn net.Conn, msg *protocol.MsgForward, failCha
 		return
 	}
 
-	uListener, err := net.Listen("tcp", fmt.Sprintf(":%d", uPort))
-	if err != nil {
-		logger.ErrorF("Error listening: %v, port: %d", err, uPort)
-		failChan <- struct{}{}
-		return
-	}
-	defer uListener.Close()
+	from := cConn.RemoteAddr().String()
 
-	logger.InfoF("Listening on forwarding port %d", uPort)
-	s.addForward(Forward{
-		To:        uPort,
-		From:      cConn.RemoteAddr().String(),
-		Subdomain: msg.Subdomain,
-		listener:  uListener,
-	})
-
-	logger.InfoF("Receive forward from %s to port %d", cConn.RemoteAddr().String(), uPort)
-	logger.InfoF("Send forward accept msg to client: %s", cConn.RemoteAddr().String())
-
-	domain := fmt.Sprintf("%s.%s", msg.Subdomain, s.cfg.Domain)
-	if !s.cfg.DomainTunnel {
-		domain = ""
-	}
-
-	if err = protocol.NewMsgForwardResp(s.cfg.Token, domain, "success").Send(cConn); err != nil {
-		logger.ErrorF("Error sending forward accept message: %v", err)
-		failChan <- struct{}{}
-		return
-	}
-
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			if err := protocol.NewMsgHeartbeat(s.cfg.Token).Send(cConn); err != nil {
-				logger.WarnF("Error sending heartbeat message: %v, forward to port: %d", err, uPort)
-				return
-			}
-		}
-	}()
-
-	for {
-		userConn, err := uListener.Accept()
+	switch msg.Type {
+	case "udp":
+		udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
+			IP:   net.ParseIP("0.0.0.0"),
+			Port: uPort,
+		})
 		if err != nil {
+			logger.ErrorF("Error listening: %v, port: %d, type: %s", err, uPort, msg.Type)
+			failChan <- struct{}{}
 			return
 		}
-		logger.DebugF("Receive new user connection: %s", userConn.RemoteAddr().String())
+		logger.InfoF("Listening on forwarding port %d, type: %s", uPort, msg.Type)
+		s.addForward(Forward{
+			To:           uPort,
+			From:         from,
+			Subdomain:    msg.Subdomain,
+			listenCloser: udpListener,
+		})
+		logger.InfoF("Receive forward from %s to port %d", from, uPort)
+		logger.InfoF("Send forward accept msg to client: %s", from)
+		domain := fmt.Sprintf("%s.%s", msg.Subdomain, s.cfg.Domain)
+		if !s.cfg.DomainTunnel {
+			domain = ""
+		}
+
+		if err = protocol.NewMsgForwardResp(s.cfg.Token, domain, "success").Send(cConn); err != nil {
+			logger.ErrorF("Error sending forward accept message: %v", err)
+			failChan <- struct{}{}
+			return
+		}
+
 		go func() {
-			cid := uuid.NewString()[:connIdLen]
-			s.connMap.Add(cid, userConn) // FIXME: if don't remove, maybe will cause memory leak
-			if err := protocol.NewMsgExchange(s.cfg.Token, cid).Send(cConn); err != nil {
-				logger.ErrorF("Error sending exchange message: %v", err)
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				if err := protocol.NewMsgHeartbeat(s.cfg.Token).Send(cConn); err != nil {
+					logger.WarnF("Error sending heartbeat message: %v, forward to port: %d", err, uPort)
+					return
+				}
 			}
-			logger.DebugF("Send new user connection id: %s", cid)
 		}()
+
+		cid := uuid.NewString()[:ConnUUIDLen]
+		s.udpConnMap.Add(cid, udpListener)
+		if err := protocol.NewMsgExchange(s.cfg.Token, cid, msg.Type).Send(cConn); err != nil {
+			logger.ErrorF("Error sending exchange message: %v", err)
+		}
+		logger.DebugF("Send udp listener to client, id: %s", cid)
+	case "tcp":
+		uListener, err := net.Listen("tcp", fmt.Sprintf(":%d", uPort))
+		if err != nil {
+			logger.ErrorF("Error listening: %v, port: %d, type: %s", err, uPort, msg.Type)
+			failChan <- struct{}{}
+			return
+		}
+		defer uListener.Close()
+
+		logger.InfoF("Listening on forwarding port %d, type: %s", uPort, msg.Type)
+		s.addForward(Forward{
+			To:           uPort,
+			From:         from,
+			Subdomain:    msg.Subdomain,
+			listenCloser: uListener,
+		})
+
+		logger.InfoF("Receive forward from %s to port %d", from, uPort)
+		logger.InfoF("Send forward accept msg to client: %s", from)
+
+		domain := fmt.Sprintf("%s.%s", msg.Subdomain, s.cfg.Domain)
+		if !s.cfg.DomainTunnel {
+			domain = ""
+		}
+
+		if err = protocol.NewMsgForwardResp(s.cfg.Token, domain, "success").Send(cConn); err != nil {
+			logger.ErrorF("Error sending forward accept message: %v", err)
+			failChan <- struct{}{}
+			return
+		}
+
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				if err := protocol.NewMsgHeartbeat(s.cfg.Token).Send(cConn); err != nil {
+					logger.WarnF("Error sending heartbeat message: %v, forward to port: %d", err, uPort)
+					return
+				}
+			}
+		}()
+
+		for {
+			userConn, err := uListener.Accept()
+			if err != nil {
+				return
+			}
+			logger.DebugF("Receive new user connection: %s", userConn.RemoteAddr().String())
+			go func() {
+				cid := uuid.NewString()[:ConnUUIDLen]
+				s.tcpConnMap.Add(cid, userConn)
+				if err := protocol.NewMsgExchange(s.cfg.Token, cid, msg.Type).Send(cConn); err != nil {
+					logger.ErrorF("Error sending exchange message: %v", err)
+				}
+				logger.DebugF("Send new user connection id: %s", cid)
+			}()
+		}
 	}
 }
 
 func (s *Server) handleExchange(conn net.Conn, msg *protocol.MsgExchange) {
-	logger.DebugF("Receive message from client: %s", msg.ConnId)
-	uConn, ok := s.connMap.Get(msg.ConnId)
-	if !ok {
-		return
+	switch msg.Type {
+	case "udp":
+		logger.DebugF("Receive udp conn exchange msg from client: %s", msg.ConnId)
+		uConn, ok := s.udpConnMap.Get(msg.ConnId)
+		if !ok {
+			return
+		}
+		defer s.udpConnMap.Del(msg.ConnId)
+		proxy.ProxyUDP(s.cfg.Token, conn, uConn)
+	case "tcp":
+		logger.DebugF("Receive tcp conn exchange msg from client: %s", msg.ConnId)
+		uConn, ok := s.tcpConnMap.Get(msg.ConnId)
+		if !ok {
+			return
+		}
+
+		defer s.tcpConnMap.Del(msg.ConnId)
+		s.metric(proxy.P(conn, uConn))
 	}
 
-	defer s.connMap.Del(msg.ConnId)
-	s.metric(proxy.P(conn, uConn))
 }
 
 func (s *Server) availablePort(port int) bool {
@@ -205,10 +277,10 @@ func (s *Server) availablePort(port int) bool {
 }
 
 type Forward struct {
-	To        int
-	From      string
-	Subdomain string
-	listener  net.Listener
+	To           int
+	From         string
+	Subdomain    string
+	listenCloser io.Closer
 }
 
 func (s *Server) addForward(f Forward) {
@@ -233,7 +305,7 @@ func (s *Server) delForward(to int) {
 	defer s.m.Unlock()
 	for i, ff := range s.forwards {
 		if ff.To == to {
-			ff.listener.Close()
+			ff.listenCloser.Close()
 			if s.cfg.DomainTunnel {
 				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.Subdomain, ff.To))
 			}

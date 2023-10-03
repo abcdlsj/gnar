@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"sync"
 
 	"github.com/abcdlsj/pipe/logger"
@@ -61,12 +62,13 @@ func (m *MsgForward) Recv(r io.Reader) error {
 	return recvInto(r, m)
 }
 
-func NewMsgForward(token, proxyName, subdomain string, remotePort int) *MsgForward {
+func NewMsgForward(token, proxyName, subdomain, typ string, remotePort int) *MsgForward {
 	return &MsgForward{
 		MetaMsg:    newMetaMsg(token),
 		ProxyName:  proxyName,
 		Subdomain:  subdomain,
 		RemotePort: remotePort,
+		Type:       typ,
 	}
 }
 
@@ -95,6 +97,7 @@ func (m *MsgForwardResp) Recv(r io.Reader) error {
 type MsgExchange struct {
 	MetaMsg
 	ConnId string `json:"conn_id"`
+	Type   string `json:"type"`
 }
 
 func (m *MsgExchange) Send(w io.Writer) error {
@@ -105,10 +108,11 @@ func (m *MsgExchange) Recv(r io.Reader) error {
 	return recvInto(r, m)
 }
 
-func NewMsgExchange(token, connId string) *MsgExchange {
+func NewMsgExchange(token, connId, typ string) *MsgExchange {
 	return &MsgExchange{
 		MetaMsg: newMetaMsg(token),
 		ConnId:  connId,
+		Type:    typ,
 	}
 }
 
@@ -133,6 +137,28 @@ func (m *MsgCancel) Send(w io.Writer) error {
 }
 
 func (m *MsgCancel) Recv(r io.Reader) error {
+	return recvInto(r, m)
+}
+
+type MsgUDPDatagram struct {
+	MetaMsg
+	Payload []byte       `json:"payload"`
+	Addr    *net.UDPAddr `json:"addr"`
+}
+
+func NewMsgUDPDatagram(token string, addr *net.UDPAddr, payload []byte) *MsgUDPDatagram {
+	return &MsgUDPDatagram{
+		MetaMsg: newMetaMsg(token),
+		Payload: payload,
+		Addr:    addr,
+	}
+}
+
+func (m *MsgUDPDatagram) Send(w io.Writer) error {
+	return sendWith(w, m)
+}
+
+func (m *MsgUDPDatagram) Recv(r io.Reader) error {
 	return recvInto(r, m)
 }
 
@@ -187,6 +213,8 @@ func extractMsgType(msg Msg) PacketType {
 		return Cancel
 	case *MsgHeartbeat:
 		return Heartbeat
+	case *MsgUDPDatagram:
+		return UDPDatagram
 	default:
 		return Unknown
 	}
@@ -203,6 +231,8 @@ func extractMetaMsg(msg Msg) (MetaMsg, error) {
 	case *MsgCancel:
 		return msg.MetaMsg, nil
 	case *MsgHeartbeat:
+		return msg.MetaMsg, nil
+	case *MsgUDPDatagram:
 		return msg.MetaMsg, nil
 	default:
 		return newMetaMsg(""), ErrInvalidMsg

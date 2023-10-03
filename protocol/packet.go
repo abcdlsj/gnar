@@ -8,12 +8,13 @@ import (
 type PacketType byte
 
 var (
-	Unknown                = PacketType(0x00)
-	Heartbeat              = PacketType(0x01)
-	Forward     PacketType = PacketType(0x02)
-	ForwardResp PacketType = PacketType(0x03)
-	Exchange    PacketType = PacketType(0x04)
-	Cancel      PacketType = PacketType(0x05)
+	Unknown     = PacketType(0x00)
+	Heartbeat   = PacketType(0x01)
+	Forward     = PacketType(0x02)
+	ForwardResp = PacketType(0x03)
+	Exchange    = PacketType(0x04)
+	Cancel      = PacketType(0x05)
+	UDPDatagram = PacketType(0x06)
 )
 
 func packet(typ PacketType, msg Msg) ([]byte, error) {

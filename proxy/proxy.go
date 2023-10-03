@@ -26,9 +26,9 @@ type Traffic struct {
 	et int64
 }
 
-func P(src, dst io.ReadWriteCloser) Traffic {
-	defer src.Close()
-	defer dst.Close()
+func P(s1, s2 io.ReadWriteCloser) Traffic {
+	defer s1.Close()
+	defer s2.Close()
 
 	buf := bufPool.Get().(*Buf)
 	defer bufPool.Put(buf)
@@ -39,7 +39,7 @@ func P(src, dst io.ReadWriteCloser) Traffic {
 
 	go func() {
 		for {
-			n, err := io.CopyBuffer(src, dst, buf.buf)
+			n, err := io.CopyBuffer(s1, s2, buf.buf)
 			if err == io.EOF || n == 0 {
 				break
 			}
@@ -48,7 +48,7 @@ func P(src, dst io.ReadWriteCloser) Traffic {
 	}()
 
 	for {
-		n, err := io.CopyBuffer(dst, src, buf.buf)
+		n, err := io.CopyBuffer(s2, s1, buf.buf)
 		if err == io.EOF || n == 0 {
 			break
 		}

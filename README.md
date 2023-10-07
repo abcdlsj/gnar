@@ -18,6 +18,7 @@ Future Plans:
 
 - [ ] Daemon mode for background execution
 - [ ] Integration of yamux for multiplexing connections
+- [ ] Can run at `fly.io`
 
 ## Install
 

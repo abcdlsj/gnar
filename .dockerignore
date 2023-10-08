@@ -1,0 +1,8 @@
+# flyctl launch added from .gitignore
+**/.envrc
+**/*.patch
+
+# binary
+**/pipe
+
+fly.toml

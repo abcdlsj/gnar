@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/proxy"
 )
 
 var (
@@ -23,14 +22,8 @@ func (s *Server) startAdmin() {
 	http.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.FS(fe))))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		upbw, dnbw, total := proxy.CalculateBandwidth(s.traffics)
 		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"forwards": s.forwards,
-			"traffic": map[string]interface{}{
-				"upbw":  upbw,
-				"dnbw":  dnbw,
-				"total": total,
-			},
 		}); err != nil {
 			logger.ErrorF("execute index.html error: %v", err)
 		}

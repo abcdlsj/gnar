@@ -18,9 +18,8 @@ type Server struct {
 	cfg         Config
 	tcpConnMap  TCPConnMap
 	udpConnMap  UDPConnMap
-	forwards    []Forward
-	traffics    []proxy.Traffic
 	portManager map[int]bool
+	forwards    []Forward
 
 	m sync.RWMutex
 }
@@ -255,7 +254,7 @@ func (s *Server) handleExchange(conn net.Conn, msg *protocol.MsgExchange) {
 			return
 		}
 		defer s.udpConnMap.Del(msg.ConnId)
-		proxy.ProxyUDP(s.cfg.Token, conn, uConn)
+		proxy.UDPDatagram(s.cfg.Token, conn, uConn)
 	case "tcp":
 		logger.DebugF("Receive tcp conn exchange msg from client: %s", msg.ConnId)
 		uConn, ok := s.tcpConnMap.Get(msg.ConnId)
@@ -264,9 +263,8 @@ func (s *Server) handleExchange(conn net.Conn, msg *protocol.MsgExchange) {
 		}
 
 		defer s.tcpConnMap.Del(msg.ConnId)
-		s.metric(proxy.P(conn, uConn))
+		proxy.Stream(conn, uConn)
 	}
-
 }
 
 func (s *Server) availablePort(port int) bool {
@@ -315,12 +313,6 @@ func (s *Server) delForward(to int) {
 			return
 		}
 	}
-}
-
-func (s *Server) metric(t proxy.Traffic) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	s.traffics = append(s.traffics, t)
 }
 
 func (s *Server) sameToken(token string) bool {

@@ -9,7 +9,7 @@ import (
 	"github.com/abcdlsj/pipe/protocol"
 )
 
-func ProxyUDPClient(token string, tcp, udp io.ReadWriteCloser) error {
+func UDPClientStream(token string, tcp, udp io.ReadWriteCloser) error {
 	go func() {
 		for {
 			msg := protocol.MsgUDPDatagram{}
@@ -45,7 +45,7 @@ func ProxyUDPClient(token string, tcp, udp io.ReadWriteCloser) error {
 		}
 	}
 }
-func ProxyUDP(token string, tcp io.ReadWriteCloser, udp *net.UDPConn) error {
+func UDPDatagram(token string, tcp io.ReadWriteCloser, udp *net.UDPConn) error {
 	for {
 		buf := make([]byte, 4096)
 		n, addr, err := udp.ReadFromUDP(buf)

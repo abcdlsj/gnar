@@ -38,7 +38,8 @@ func (c *TCPConnMap) Get(id string) (io.ReadWriteCloser, bool) {
 func (c *TCPConnMap) Del(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.conns[id].conn.Close()
+	// TODO: why there don't need to close conn?
+	// c.conns[id].conn.Close()
 	delete(c.conns, id)
 }
 

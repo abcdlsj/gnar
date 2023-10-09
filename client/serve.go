@@ -96,54 +96,54 @@ func (c *Client) Handle(forward Forward) {
 
 			switch msg.Type {
 			case "udp":
-				logger.InfoF("Receive udp conn from server, start proxying, conn_id: %s", msg.ConnId)
-				lConn, err := net.DialUDP("udp", nil, &net.UDPAddr{
-					IP:   net.ParseIP("0.0.0.0"),
-					Port: forward.LocalPort,
-				})
-				if err != nil {
-					logger.ErrorF("Error connecting to local: %v, will close forward, %s:%d", err, forward.Type, forward.LocalPort)
-					c.cancelForward(forward)
-					return
-				}
-
-				nRconn, err := c.newSvrConn()
-				if err != nil {
-					logger.ErrorF("Error connecting to remote: %v", err)
-					c.cancelForward(forward)
-					return
-				}
-
 				go func() {
+					logger.InfoF("Receive udp conn from server, start proxying, conn_id: %s", msg.ConnId)
+					nRconn, err := c.newSvrConn()
+					if err != nil {
+						logger.ErrorF("Error connecting to remote: %v", err)
+						c.cancelForward(forward)
+						return
+					}
+
 					if err = protocol.NewMsgExchange(c.cfg.Token, msg.ConnId, forward.Type).Send(nRconn); err != nil {
 						logger.InfoF("Error sending exchange msg to remote: %v", err)
 					}
-					if err := proxy.ProxyUDPClient(c.cfg.Token, nRconn, lConn); err != nil {
+
+					lConn, err := net.DialUDP("udp", nil, &net.UDPAddr{
+						IP:   net.ParseIP("0.0.0.0"),
+						Port: forward.LocalPort,
+					})
+					if err != nil {
+						logger.ErrorF("Error connecting to local: %v, will close forward, %s:%d", err, forward.Type, forward.LocalPort)
+						// TODO: need to cancel forward?
+						// c.cancelForward(forward)
+						return
+					}
+					if err := proxy.UDPClientStream(c.cfg.Token, nRconn, lConn); err != nil {
 						logger.ErrorF("Error proxying udp: %v", err)
 						c.cancelForward(forward)
 					}
 				}()
 			case "tcp":
-				logger.InfoF("Receive user req from server, start proxying, conn_id: %s", msg.ConnId)
-				lConn, err := net.Dial(msg.Type, fmt.Sprintf(":%d", forward.LocalPort))
-				if err != nil {
-					logger.ErrorF("Error connecting to local: %v, will close forward, %s:%d", err, forward.Type, forward.LocalPort)
-					c.cancelForward(forward)
-					return
-				}
-
-				nRconn, err := c.newSvrConn()
-				if err != nil {
-					logger.ErrorF("Error connecting to remote: %v", err)
-					c.cancelForward(forward)
-					return
-				}
-
 				go func() {
+					logger.InfoF("Receive user req from server, start proxying, conn_id: %s", msg.ConnId)
+					nRconn, err := c.newSvrConn()
+					if err != nil {
+						logger.ErrorF("Error connecting to remote: %v", err)
+						c.cancelForward(forward)
+						return
+					}
 					if err = protocol.NewMsgExchange(c.cfg.Token, msg.ConnId, forward.Type).Send(nRconn); err != nil {
 						logger.InfoF("Error sending exchange msg to remote: %v", err)
 					}
-					proxy.P(lConn, nRconn)
+					lConn, err := net.Dial(msg.Type, fmt.Sprintf(":%d", forward.LocalPort))
+					if err != nil {
+						logger.ErrorF("Error connecting to local: %v, will close forward, %s:%d", err, forward.Type, forward.LocalPort)
+						// TODO: need to cancel forward?
+						// c.cancelForward(forward)
+						return
+					}
+					proxy.Stream(lConn, nRconn)
 				}()
 			}
 		case protocol.Heartbeat:

@@ -19,6 +19,7 @@ Future Plans:
 
 - [ ] Daemon mode for background execution
 - [ ] Integration of yamux for multiplexing connections
+- [ ] Add metrics (bandwidths/upward and downward)
 
 ## Install
 

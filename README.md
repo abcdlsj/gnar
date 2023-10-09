@@ -13,12 +13,12 @@ Features:
 - [x] Supports forwarding from multiple clients
 - [x] Includes token-based authentication for added security
 - [x] Server-side admin panel (currently, it's simple)
+- [x] Can run at `fly.io`
 
 Future Plans:
 
 - [ ] Daemon mode for background execution
 - [ ] Integration of yamux for multiplexing connections
-- [ ] Can run at `fly.io`
 
 ## Install
 

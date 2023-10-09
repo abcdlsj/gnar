@@ -1,3 +1,19 @@
+<!-- TOC start (generated with https://github.com/derlin/bitdowntoc) -->
+
+- [Pipe](#pipe)
+  - [Install](#install)
+  - [Usage](#usage)
+  - [Client](#client)
+  - [Server](#server)
+    - [Server admin panel](#server-admin-panel)
+  - [Simple Start](#simple-start)
+  - [Deploy at `fly.io`](#deploy-at-flyio)
+  - [Subdomain proxy](#subdomain-proxy)
+  - [Trubleshooting](#trubleshooting)
+
+<!-- TOC end -->
+
+<!-- TOC --><a name="pipe"></a>
 # Pipe
 
 [![asciicast](https://asciinema.org/a/606328.svg)](https://asciinema.org/a/606328)
@@ -21,6 +37,7 @@ Future Plans:
 - [ ] Integration of yamux for multiplexing connections
 - [ ] Add metrics (bandwidths/upward and downward)
 
+<!-- TOC --><a name="install"></a>
 ## Install
 
 ```
@@ -28,6 +45,7 @@ git clone https://github.com/abcdlsj/pipe
 make
 ```
 
+<!-- TOC --><a name="usage"></a>
 ## Usage
 
 ```
@@ -50,6 +68,7 @@ Flags:
 Use "pipe [command] --help" for more information about a command.
 ```
 
+<!-- TOC --><a name="client"></a>
 ## Client
 ```
 Usage:
@@ -67,6 +86,7 @@ Flags:
   -t, --token string         token
 ```
 
+<!-- TOC --><a name="server"></a>
 ## Server 
 ```
 Usage:
@@ -82,10 +102,12 @@ Flags:
   -t, --token string     token
 ```
 
+<!-- TOC --><a name="server-admin-panel"></a>
 ### Server admin panel
 
 ![admin panel](screenshot-server-admin.png)
 
+<!-- TOC --><a name="simple-start"></a>
 ## Simple Start
 
 Server
@@ -103,6 +125,52 @@ pipe client -s localhost -p 8910 -l 3000 -u 9001
 
 view `host:9001` and you will see the service.
 
+<!-- TOC --><a name="deploy-at-flyio"></a>
+## Deploy at `fly.io`
+
+You can edit `entrupoint.sh` to start your own server **you need to special set forward port.**
+
+Example:
+```toml
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+app = "xxxx"
+primary_region = "hkg"
+
+[build]
+
+# Control
+[[services]]
+  internal_port = 8910
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 8910
+  
+# Admin
+[[services]]
+  internal_port = 8911
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+# Forward TCP
+[[services]]
+  internal_port = 9000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 9000
+```
+This can view `xxxx.fly.dev:9000` and then view your own internal server.
+
+<!-- TOC --><a name="subdomain-proxy"></a>
 ## Subdomain proxy
 
 1. make sure you have a domain and set the dns record to your server ip.
@@ -135,6 +203,7 @@ A example.com <your server ip> (`@` is ok too)
 6. visit `3ec8f1b.xxx.xxx` and you will see the service.
 
 
+<!-- TOC --><a name="trubleshooting"></a>
 ## Trubleshooting
 
 1. subdomain proxy not work

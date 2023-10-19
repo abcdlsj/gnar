@@ -19,6 +19,8 @@ type Forward struct {
 	Subdomain  string `toml:"subdomain"`
 	RemotePort int    `toml:"remote-port"`
 	LocalPort  int    `toml:"local-port"`
+	SpeedLimit string `toml:"speed-limit"` // xx/s
+	Noise      string `toml:"noise"`       // transport noise
 	Type       string `toml:"type"`
 }
 

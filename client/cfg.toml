@@ -7,6 +7,7 @@ proxy-name = "python_http_file_service" # optional
 subdomain = "python3-http" # optional
 local-port = 3000
 remote-port = 9001
+speed-limit = "100kb"
 type = "tcp"
 
 [[forwards]]

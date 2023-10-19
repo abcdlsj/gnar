@@ -34,6 +34,7 @@ Features:
 Future Plans:
 
 - [ ] Daemon mode for background execution
+- [ ] Smooth upgrade (upgrade client/server version)
 - [ ] Integration of yamux for multiplexing connections
 - [ ] Add metrics (bandwidths/upward and downward)
 
@@ -128,7 +129,7 @@ view `host:9001` and you will see the service.
 <!-- TOC --><a name="deploy-at-flyio"></a>
 ## Deploy at `fly.io`
 
-You can edit `entrupoint.sh` to start your own server **you need to special set forward port.**
+You can edit `entrypoint.sh` to start your own server **you need to special set forward port.**
 
 Example:
 ```toml

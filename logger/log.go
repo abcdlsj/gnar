@@ -152,7 +152,7 @@ func FatalF(format string, v ...interface{}) {
 }
 
 func LFatalF(logger *Logger, format string, v ...interface{}) {
-	Printf(logger.logger, logger.prefix, FATAL, format, v...)
+	logger.logger.Fatalf(Prefix(logger.prefix, FATAL)+format, v...)
 }
 
 func Fatal(v ...interface{}) {

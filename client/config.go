@@ -8,8 +8,7 @@ import (
 )
 
 type Config struct {
-	SvrHost  string    `toml:"server-host"`
-	SvrPort  int       `toml:"server-port"`
+	SvrAddr  string    `toml:"server-addr"`
 	Token    string    `toml:"token"`
 	Forwards []Forward `toml:"forwards"`
 }
@@ -20,19 +19,22 @@ type Forward struct {
 	RemotePort int    `toml:"remote-port"`
 	LocalPort  int    `toml:"local-port"`
 	SpeedLimit string `toml:"speed-limit"` // xx/s
-	Noise      string `toml:"noise"`       // transport noise
-	Type       string `toml:"type"`
+	ProxyType  string `toml:"proxy-type"`
+}
+
+type Transport struct {
+	Noise string `toml:"noise"`
 }
 
 func parseConfig(cfgFile string) Config {
 	data, err := os.ReadFile(cfgFile)
 	if err != nil {
-		logger.FatalF("Error reading config file: %v", err)
+		logger.Fatalf("Error reading config file: %v", err)
 	}
 
 	var cfg Config
 	if err := toml.Unmarshal(data, &cfg); err != nil {
-		logger.FatalF("Error parsing config file: %v", err)
+		logger.Fatalf("Error parsing config file: %v", err)
 	}
 
 	return cfg

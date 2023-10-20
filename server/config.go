@@ -18,12 +18,12 @@ type Config struct {
 func parseConfig(cfgFile string) Config {
 	data, err := os.ReadFile(cfgFile)
 	if err != nil {
-		logger.FatalF("Error reading config file: %v", err)
+		logger.Fatalf("Error reading config file: %v", err)
 	}
 
 	var cfg Config
 	if err := toml.Unmarshal(data, &cfg); err != nil {
-		logger.FatalF("Error parsing config file: %v", err)
+		logger.Fatalf("Error parsing config file: %v", err)
 	}
 
 	return cfg

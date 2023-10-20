@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/abcdlsj/cr"
 )
@@ -36,25 +37,36 @@ func (l Level) String() string {
 }
 
 type Logger struct {
-	prefix string
-	logger *log.Logger
+	prefixs []string
+	logger  *log.Logger
 }
 
 func New(prefix string) *Logger {
 	return &Logger{
-		prefix: prefix,
-		logger: log.New(os.Stderr, "", log.LstdFlags),
+		prefixs: []string{prefix},
+		logger:  log.New(os.Stderr, "", log.LstdFlags),
 	}
 }
 
-var DefaultLogger *Logger
+func (l *Logger) Add(prefix string) {
+	l.prefixs = append(l.prefixs, prefix)
+}
+
+func (l *Logger) CloneAdd(prefix string) *Logger {
+	return &Logger{
+		prefixs: append(l.prefixs, prefix),
+		logger:  log.New(os.Stderr, "", log.LstdFlags),
+	}
+}
+
+var defalt *Logger
 
 func init() {
 	if os.Getenv("DEBUG") != "" {
 		SetLevel(DEBUG)
 	}
 
-	DefaultLogger = New("")
+	defalt = New("[GLOBAL]")
 }
 
 var globalLevel = INFO
@@ -63,106 +75,124 @@ func SetLevel(level Level) {
 	globalLevel = level
 }
 
-func Prefix(prefix string, level Level) string {
-	if prefix == "" {
+func header(prefixs []string, level Level) string {
+	rainbow := []func(string) string{
+		cr.PLYellow,
+		cr.PLBlue,
+		cr.PLGreen,
+		cr.PLCyan,
+		cr.PLMagenta,
+	}
+
+	apply := func(texts ...string) string {
+		var sb strings.Builder
+		for i, text := range texts {
+			sb.WriteString(rainbow[i%len(rainbow)](text) + " ")
+		}
+		return sb.String()
+	}
+
+	if len(prefixs) == 0 {
 		return fmt.Sprintf("%s ", level)
 	}
 
-	return fmt.Sprintf("%s %s ", level, cr.PLBlue(prefix))
+	return fmt.Sprintf("%s %s", level, apply(prefixs...))
 }
 
-func Printf(logger *log.Logger, prefix string, level Level, format string, v ...interface{}) {
+func builderf(logger *log.Logger, prefixs []string, level Level, format string, v ...interface{}) {
+	if level == FATAL {
+		logger.Fatalf(header(prefixs, level)+format, v...)
+	}
 	if globalLevel <= level {
-		logger.Printf(Prefix(prefix, level)+format, v...)
+		logger.Printf(header(prefixs, level)+format, v...)
 	}
 }
 
-func Print(logger *log.Logger, prefix string, level Level, v ...interface{}) {
+func builder(logger *log.Logger, prefixs []string, level Level, v ...interface{}) {
+	if level == FATAL {
+		logger.Fatalf(header(prefixs, level) + fmt.Sprintln(v...))
+	}
 	if globalLevel <= level {
-		logger.Print(Prefix(prefix, level) + fmt.Sprintln(v...))
+		logger.Print(header(prefixs, level) + fmt.Sprintln(v...))
 	}
 }
 
-func DebugF(format string, v ...interface{}) {
-	LDebugF(DefaultLogger, format, v...)
+func (l *Logger) Debugf(format string, v ...interface{}) {
+	builderf(l.logger, l.prefixs, DEBUG, format, v...)
 }
 
-func LDebugF(logger *Logger, format string, v ...interface{}) {
-	Printf(logger.logger, logger.prefix, DEBUG, format, v...)
+func (l *Logger) Infof(format string, v ...interface{}) {
+	builderf(l.logger, l.prefixs, INFO, format, v...)
 }
 
-func InfoF(format string, v ...interface{}) {
-	LInfoF(DefaultLogger, format, v...)
+func (l *Logger) Warnf(format string, v ...interface{}) {
+	builderf(l.logger, l.prefixs, WARN, format, v...)
 }
 
-func LInfoF(logger *Logger, format string, v ...interface{}) {
-	Printf(logger.logger, logger.prefix, INFO, format, v...)
+func (l *Logger) Errorf(format string, v ...interface{}) {
+	builderf(l.logger, l.prefixs, ERROR, format, v...)
 }
 
-func WarnF(format string, v ...interface{}) {
-	LWarnF(DefaultLogger, format, v...)
+func (l *Logger) Fatalf(format string, v ...interface{}) {
+	builderf(l.logger, l.prefixs, FATAL, format, v...)
 }
 
-func LWarnF(logger *Logger, format string, v ...interface{}) {
-	Printf(logger.logger, logger.prefix, WARN, format, v...)
+func (l *Logger) Debug(v ...interface{}) {
+	builder(l.logger, l.prefixs, DEBUG, v...)
 }
 
-func ErrorF(format string, v ...interface{}) {
-	LErrorF(DefaultLogger, format, v...)
+func (l *Logger) Info(v ...interface{}) {
+	builder(l.logger, l.prefixs, INFO, v...)
 }
 
-func LErrorF(logger *Logger, format string, v ...interface{}) {
-	Printf(logger.logger, logger.prefix, ERROR, format, v...)
+func (l *Logger) Warn(v ...interface{}) {
+	builder(l.logger, l.prefixs, WARN, v...)
+}
+
+func (l *Logger) Error(v ...interface{}) {
+	builder(l.logger, l.prefixs, ERROR, v...)
+}
+
+func (l *Logger) Fatal(v ...interface{}) {
+	builder(l.logger, l.prefixs, FATAL, v...)
+}
+
+func Debugf(format string, v ...interface{}) {
+	defalt.Debugf(format, v...)
+}
+
+func Infof(format string, v ...interface{}) {
+	defalt.Infof(format, v...)
+}
+
+func Warnf(format string, v ...interface{}) {
+	defalt.Warnf(format, v...)
+}
+
+func Errorf(format string, v ...interface{}) {
+	defalt.Errorf(format, v...)
 }
 
 func Debug(v ...interface{}) {
-	LDebug(DefaultLogger, v...)
-}
-
-func LDebug(logger *Logger, v ...interface{}) {
-	Print(logger.logger, logger.prefix, DEBUG, v...)
+	defalt.Debug(v...)
 }
 
 func Info(v ...interface{}) {
-	LInfo(DefaultLogger, v...)
-}
-
-func LInfo(logger *Logger, v ...interface{}) {
-	Print(logger.logger, logger.prefix, INFO, v...)
+	defalt.Info(v...)
 }
 
 func Warn(v ...interface{}) {
-	Lwarn(DefaultLogger, v...)
-}
-
-func Lwarn(logger *Logger, v ...interface{}) {
-	Print(logger.logger, logger.prefix, WARN, v...)
+	defalt.Warn(v...)
 }
 
 func Error(v ...interface{}) {
-	LError(DefaultLogger, v...)
+	defalt.Error(v...)
 }
 
-func LError(logger *Logger, v ...interface{}) {
-	Print(logger.logger, logger.prefix, ERROR, v...)
-}
-
-func FatalF(format string, v ...interface{}) {
-	LFatalF(DefaultLogger, format, v...)
-}
-
-func LFatalF(logger *Logger, format string, v ...interface{}) {
-	logger.logger.Fatalf(Prefix(logger.prefix, FATAL)+format, v...)
+func Fatalf(format string, v ...interface{}) {
+	defalt.Fatalf(format, v...)
 }
 
 func Fatal(v ...interface{}) {
-	LFatal(DefaultLogger, v...)
-}
-
-func LFatal(logger *Logger, v ...interface{}) {
-	Print(logger.logger, logger.prefix, FATAL, v...)
-}
-
-func NewPrefixLogger(prefix string) *log.Logger {
-	return log.New(os.Stderr, prefix, log.LstdFlags)
+	defalt.Fatal(v...)
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/abcdlsj/pipe/client"
-	"github.com/abcdlsj/pipe/logger"
 	"github.com/abcdlsj/pipe/server"
 	"github.com/spf13/cobra"
 )
@@ -23,7 +22,5 @@ func Execute(gitHash, buildStamp string) {
 
 	RootCmd.Version = fmt.Sprintf("v0.0.1-%s; buildstamp %s", gitHash, buildStamp)
 
-	if err := RootCmd.Execute(); err != nil {
-		logger.FatalF("Execute cobra cmd failed, err: %v", err)
-	}
+	RootCmd.Execute()
 }

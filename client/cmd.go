@@ -6,8 +6,7 @@ import (
 
 func Command() *cobra.Command {
 	var (
-		shost     string
-		sport     int
+		svrAddr   string
 		lport     int
 		fport     int
 		token     string
@@ -30,10 +29,9 @@ func Command() *cobra.Command {
 					RemotePort: fport,
 					Subdomain:  subdomain,
 					ProxyName:  proxyName,
-					Type:       typ,
+					ProxyType:  typ,
 				}
-				flagCfg.SvrHost = shost
-				flagCfg.SvrPort = sport
+				flagCfg.SvrAddr = svrAddr
 				flagCfg.Token = token
 
 				newClient(flagCfg).Run()
@@ -43,8 +41,7 @@ func Command() *cobra.Command {
 
 	flagCfg.Forwards = make([]Forward, 1)
 
-	cfg.PersistentFlags().StringVarP(&shost, "server-host", "s", "localhost", "server host")
-	cfg.PersistentFlags().IntVarP(&sport, "server-port", "p", 8910, "server port")
+	cfg.PersistentFlags().StringVarP(&svrAddr, "server-addr", "s", "localhost:8910", "server addr")
 	cfg.PersistentFlags().IntVarP(&fport, "forward-port", "u", 0, "forward port")
 	cfg.PersistentFlags().IntVarP(&lport, "local-port", "l", 0, "local port")
 	cfg.PersistentFlags().StringVarP(&token, "token", "t", "", "token")

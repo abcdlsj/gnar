@@ -25,12 +25,12 @@ func (s *Server) startAdmin() {
 		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
 			"forwards": s.forwards,
 		}); err != nil {
-			logger.ErrorF("execute index.html error: %v", err)
+			logger.Errorf("execute index.html error: %v", err)
 		}
 	})
 
-	logger.InfoF("admin server started on port %d", s.cfg.AdminPort)
+	logger.Infof("admin server started on port %d", s.cfg.AdminPort)
 	if err := http.ListenAndServe(":"+strconv.Itoa(s.cfg.AdminPort), nil); err != nil {
-		logger.FatalF("admin server error: %v", err)
+		logger.Fatalf("admin server error: %v", err)
 	}
 }

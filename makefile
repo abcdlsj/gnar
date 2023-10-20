@@ -14,7 +14,7 @@ test_simple: prebuild_startpy
 	./pipe server -t 'make test' 2>&1 /dev/null &
 	sleep 1
 
-	./pipe client -s 127.0.0.1 -p 8910 -l 3000 -u 9100 -t 'make test' 2>&1 /dev/null &
+	./pipe client -s 127.0.0.1:8910 -l 3000 -u 9100 -t 'make test' 2>&1 /dev/null &
 	sleep 1
 
 	curl -I http://127.0.0.1:9100
@@ -28,10 +28,10 @@ test_simple_udp: prebuild_startpy
 	./pipe server -t 'make test' 2>&1 /dev/null &
 	sleep 1
 
-	./pipe client -s 127.0.0.1 -p 8910 -l 3000 -u 9100 -t 'make test' -y 'udp' 2>&1 /dev/null &
+	./pipe client -s 127.0.0.1:8910 -l 3000 -u 9100 -t 'make test' -y 'udp' 2>&1 /dev/null &
 	sleep 1
 
-	curl -I http://127.0.0.1:9100
+	nc -u localhost 9100
 
 	sleep 5
 
@@ -43,7 +43,7 @@ test_auth: prebuild_startpy
 	./pipe server -t 'make test-auth' 2>&1 /dev/null &
 	sleep 1
 
-	./pipe client -s 127.0.0.1 -p 8910 -l 3000 -u 9100 -t 'make test-auth failed' 2>&1 /dev/null &
+	./pipe client -s 127.0.0.1:8910 -l 3000 -u 9100 -t 'make test-auth failed' 2>&1 /dev/null &
 	sleep 1
 
 	# curl -I http://127.0.0.1:9100

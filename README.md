@@ -50,17 +50,17 @@ make
 ## Usage
 
 ```
-pipe is a frp like tool.
+pipe is a proxy tool.
 
 Usage:
   pipe [flags]
   pipe [command]
 
 Available Commands:
-  client     
-  server      
+  client      
   completion  Generate the autocompletion script for the specified shell
   help        Help about any command
+  server      
 
 Flags:
   -h, --help      help for pipe
@@ -81,10 +81,10 @@ Flags:
   -h, --help                 help for client
   -l, --local-port int       local port
   -n, --proxy-name string    proxy name
-  -s, --server-host string   server host (default "localhost")
-  -p, --server-port int      server port (default 8910)
+  -s, --server-addr string   server addr (default "localhost:8910")
   -d, --subdomain string     subdomain
   -t, --token string         token
+  -y, --type string          forward protocol type (default "tcp")
 ```
 
 <!-- TOC --><a name="server"></a>
@@ -121,7 +121,7 @@ Client
 # start a service
 python3 -m http.server 3000
 # start forward
-pipe client -s localhost -p 8910 -l 3000 -u 9001
+pipe client -s localhost:8910 -l 3000 -u 9001
 ```
 
 view `host:9001` and you will see the service.

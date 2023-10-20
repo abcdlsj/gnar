@@ -14,6 +14,7 @@ func main() {
 	}
 	defer udpServer.Close()
 
+	fmt.Println("Server listen on port 3000")
 	for {
 		buf := make([]byte, 1024)
 		_, addr, err := udpServer.ReadFrom(buf)

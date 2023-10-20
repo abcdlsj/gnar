@@ -1,4 +1,4 @@
-package protocol
+package proto
 
 import (
 	"encoding/json"
@@ -8,16 +8,38 @@ import (
 type PacketType byte
 
 var (
-	Unknown     = PacketType(0x00)
-	Heartbeat   = PacketType(0x01)
-	Forward     = PacketType(0x02)
-	ForwardResp = PacketType(0x03)
-	Exchange    = PacketType(0x04)
-	Cancel      = PacketType(0x05)
-	UDPDatagram = PacketType(0x06)
+	PacketUnknown       = PacketType(0x00)
+	PacketLogin         = PacketType(0x01)
+	PacketHeartbeat     = PacketType(0x02)
+	PacketForwardReq    = PacketType(0x03)
+	PacketForwardResp   = PacketType(0x04)
+	PacketForwardCancel = PacketType(0x05)
+	PacketExchange      = PacketType(0x06)
+	PacketUDPDatagram   = PacketType(0x07)
 )
 
-func packet(typ PacketType, msg Msg) ([]byte, error) {
+func (p PacketType) String() string {
+	switch p {
+	case PacketLogin:
+		return "login"
+	case PacketHeartbeat:
+		return "hbeat"
+	case PacketForwardReq:
+		return "freq"
+	case PacketForwardResp:
+		return "fresp"
+	case PacketForwardCancel:
+		return "fcancel"
+	case PacketExchange:
+		return "exchan"
+	case PacketUDPDatagram:
+		return "udpgram"
+	default:
+		return "unknown"
+	}
+}
+
+func packet(typ PacketType, msg interface{}) ([]byte, error) {
 	buf, err := json.Marshal(msg)
 	if err != nil {
 		return nil, err
@@ -40,7 +62,7 @@ func packet0(typ PacketType, buf []byte) ([]byte, error) {
 func read(r io.Reader) (PacketType, []byte, error) {
 	typ, buf, err := read0(r)
 	if err != nil {
-		return Unknown, nil, err
+		return PacketUnknown, nil, err
 	}
 	return PacketType(typ), buf, nil
 }

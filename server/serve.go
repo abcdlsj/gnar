@@ -12,13 +12,14 @@ import (
 	"github.com/abcdlsj/pipe/logger"
 	"github.com/abcdlsj/pipe/proto"
 	"github.com/abcdlsj/pipe/proxy"
+	"github.com/abcdlsj/pipe/server/conn"
 	"github.com/google/uuid"
 )
 
 type Server struct {
 	cfg         Config
-	tcpConnMap  TCPConnMap
-	udpConnMap  UDPConnMap
+	tcpConnMap  conn.TCPConnMap
+	udpConnMap  conn.UDPConnMap
 	portManager map[int]bool
 	forwards    []Forward
 
@@ -27,13 +28,9 @@ type Server struct {
 
 func newServer(cfg Config) *Server {
 	return &Server{
-		cfg: cfg,
-		tcpConnMap: TCPConnMap{
-			conns: make(map[string]TCPConn),
-		},
-		udpConnMap: UDPConnMap{
-			conns: make(map[string]*net.UDPConn),
-		},
+		cfg:         cfg,
+		tcpConnMap:  conn.NewTCPConnMap(),
+		udpConnMap:  conn.NewUDPConnMap(),
 		portManager: make(map[int]bool),
 	}
 }
@@ -72,18 +69,16 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
-	if s.cfg.Token != "" {
-		hash := md5.New()
-		hash.Write([]byte(s.cfg.Token + fmt.Sprintf("%d", loginMsg.Timestamp)))
+	hash := md5.New()
+	hash.Write([]byte(s.cfg.Token + fmt.Sprintf("%d", loginMsg.Timestamp)))
 
-		if fmt.Sprintf("%x", hash.Sum(nil)) != loginMsg.Token {
-			logger.Errorf("Invalid token, client addr: %s", conn.RemoteAddr().String())
-			conn.Close()
-			return
-		}
-
-		logger.Infof("Auth success, client addr: %s", conn.RemoteAddr().String())
+	if fmt.Sprintf("%x", hash.Sum(nil)) != loginMsg.Token {
+		logger.Errorf("Invalid token, client addr: %s", conn.RemoteAddr().String())
+		conn.Close()
+		return
 	}
+
+	logger.Debugf("Auth success, client addr: %s", conn.RemoteAddr().String())
 
 	pt, buf, err := proto.Read(conn)
 	if err != nil {
@@ -189,12 +184,12 @@ func (s *Server) handleForward(cConn net.Conn, msg *proto.MsgForwardReq, failCha
 			}
 		}()
 
-		cid := uuid.NewString()[:ConnUUIDLen]
-		s.udpConnMap.Add(cid, udpListener)
-		if err := proto.Send(cConn, proto.NewMsgExchange(cid, msg.ProxyType)); err != nil {
+		uid := conn.NewUuid()
+		s.udpConnMap.Add(uid, udpListener)
+		if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
 			logger.Errorf("Error sending exchange message: %v", err)
 		}
-		logger.Debugf("Send udp listener to client, id: %s", cid)
+		logger.Debugf("Send udp listener to client, id: %s", uid)
 	case "tcp":
 		uListener, err := net.Listen("tcp", fmt.Sprintf(":%d", uPort))
 		if err != nil {
@@ -245,12 +240,12 @@ func (s *Server) handleForward(cConn net.Conn, msg *proto.MsgForwardReq, failCha
 			}
 			logger.Debugf("Receive new user conn: %s", userConn.RemoteAddr().String())
 			go func() {
-				cid := uuid.NewString()[:ConnUUIDLen]
-				s.tcpConnMap.Add(cid, userConn)
-				if err := proto.Send(cConn, proto.NewMsgExchange(cid, msg.ProxyType)); err != nil {
+				uid := conn.NewUuid()
+				s.tcpConnMap.Add(uid, userConn)
+				if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
 					logger.Errorf("Error sending exchange message: %v", err)
 				}
-				logger.Debugf("Send new user conn id: %s", cid)
+				logger.Debugf("Send new user conn id: %s", uid)
 			}()
 		}
 	}

@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/abcdlsj/pipe/logger"
@@ -21,16 +20,15 @@ type Client struct {
 }
 
 type Forwarder struct {
+	remotePort int
+	localPort  int
 	token      string
 	svraddr    string // server host:port
 	proxyName  string
 	subdomain  string
-	remotePort int
-	localPort  int
 	speedLimit string
 	proxyType  string
-
-	logger *logger.Logger
+	logger     *logger.Logger
 }
 
 func newClient(cfg Config) *Client {
@@ -40,6 +38,11 @@ func newClient(cfg Config) *Client {
 }
 
 func newForwarder(svraddr string, token string, f Forward) *Forwarder {
+	logPrefix := fmt.Sprintf("%s[%d:%d]", strings.ToUpper(f.ProxyType), f.LocalPort, f.RemotePort)
+	if f.ProxyName != "" {
+		logPrefix = fmt.Sprintf("%s[%s]", strings.ToUpper(f.ProxyType), f.ProxyName)
+	}
+
 	return &Forwarder{
 		token:      token,
 		svraddr:    svraddr,
@@ -49,26 +52,27 @@ func newForwarder(svraddr string, token string, f Forward) *Forwarder {
 		localPort:  f.LocalPort,
 		speedLimit: f.SpeedLimit,
 		proxyType:  f.ProxyType,
-
-		logger: logger.New(fmt.Sprintf("%s[%d:%d]", strings.ToUpper(f.ProxyType), f.LocalPort, f.RemotePort)),
+		logger:     logger.New(logPrefix),
 	}
 }
 
 func (c *Client) Run() {
-	go c.signalShutdown()
-
-	var wg sync.WaitGroup
+	logger.Info("Press Ctrl+C to shutdown")
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
 	for _, forward := range c.cfg.Forwards {
-		wg.Add(1)
-
-		newForwarder(c.cfg.SvrAddr, c.cfg.Token, forward).Run()
+		go newForwarder(c.cfg.SvrAddr, c.cfg.Token, forward).Run()
 	}
 
-	wg.Wait()
+	<-sc
+	logger.Info("Receive signal to shutdown")
+	for _, f := range c.cfg.Forwards {
+		cancelForward(c.cfg.Token, c.cfg.SvrAddr, f.ProxyName, f.LocalPort, f.RemotePort)
+	}
 }
 
-func dialSvr(svraddr string, token string) (net.Conn, error) {
+func authDialSvr(svraddr string, token string) (net.Conn, error) {
 	conn, err := net.Dial("tcp", svraddr)
 	if err != nil {
 		return nil, err
@@ -82,7 +86,7 @@ func dialSvr(svraddr string, token string) (net.Conn, error) {
 }
 
 func (f *Forwarder) Run() {
-	rConn, err := dialSvr(f.svraddr, f.token)
+	rConn, err := authDialSvr(f.svraddr, f.token)
 	if err != nil {
 		f.logger.Fatalf("Error connecting to remote: %v", err)
 	}
@@ -95,7 +99,7 @@ func (f *Forwarder) Run() {
 
 	frdResp := &proto.MsgForwardResp{}
 	if err = proto.Recv(rConn, frdResp); err != nil {
-		f.logger.Fatalf("Error read forward resp msg from remote: %v", err)
+		f.logger.Fatal("Error reading forward resp msg from remote, please check your config")
 	}
 
 	if frdResp.Status != "success" {
@@ -111,7 +115,7 @@ func (f *Forwarder) Run() {
 	for {
 		p, buf, err := proto.Read(rConn)
 		if err != nil {
-			f.logger.Errorf("Error read msg from remote: %v", err)
+			f.logger.Errorf("Error reading msg from remote: %v", err)
 			return
 		}
 
@@ -120,7 +124,7 @@ func (f *Forwarder) Run() {
 		case proto.PacketExchange:
 			msg := &proto.MsgExchange{}
 			if err := json.Unmarshal(buf, msg); err != nil {
-				nlogger.Errorf("Error read exchange msg from remote: %v", err)
+				nlogger.Errorf("Error reading exchange msg from remote: %v", err)
 				cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
 				return
 			}
@@ -129,7 +133,7 @@ func (f *Forwarder) Run() {
 			case "udp":
 				go func() {
 					nlogger.Infof("Receive udp conn from server, start proxying, conn_id: %s", msg.ConnId)
-					nRconn, err := dialSvr(f.svraddr, f.token)
+					nRconn, err := authDialSvr(f.svraddr, f.token)
 					if err != nil {
 						nlogger.Errorf("Error connecting to remote: %v", err)
 						cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
@@ -157,7 +161,7 @@ func (f *Forwarder) Run() {
 			case "tcp":
 				go func() {
 					nlogger.Infof("Receive user req from server, start proxying, conn_id: %s", msg.ConnId)
-					nRconn, err := dialSvr(f.svraddr, f.token)
+					nRconn, err := authDialSvr(f.svraddr, f.token)
 					if err != nil {
 						nlogger.Errorf("Error connecting to remote: %v", err)
 						cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
@@ -184,7 +188,7 @@ func (f *Forwarder) Run() {
 		case proto.PacketHeartbeat:
 			msg := &proto.MsgHeartbeat{}
 			if err := json.Unmarshal(buf, msg); err != nil {
-				nlogger.Errorf("Error read heartbeat msg from remote: %v", err)
+				nlogger.Errorf("Error reading heartbeat msg from remote: %v", err)
 				cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
 				return
 			}
@@ -195,7 +199,7 @@ func (f *Forwarder) Run() {
 }
 
 func cancelForward(token, svr, proxyName string, lport, rport int) {
-	rConn, err := dialSvr(svr, token)
+	rConn, err := authDialSvr(svr, token)
 	if err != nil {
 		logger.Fatalf("Error connecting to remote: %v", err)
 	}
@@ -203,19 +207,4 @@ func cancelForward(token, svr, proxyName string, lport, rport int) {
 		logger.Fatalf("Error sending cancel msg to remote: %v", err)
 	}
 	logger.Infof("Close connection to server, local port: %d, remote port: %d", lport, rport)
-}
-
-func (c *Client) signalShutdown() {
-	logger.Info("Press Ctrl+C to shutdown")
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	<-sc
-	logger.Info("Receive signal to shutdown")
-
-	for _, f := range c.cfg.Forwards {
-		cancelForward(c.cfg.Token, c.cfg.SvrAddr, f.ProxyName, f.LocalPort, f.RemotePort)
-	}
-
-	os.Exit(1)
 }

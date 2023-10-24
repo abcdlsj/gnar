@@ -1,4 +1,4 @@
-package server
+package conn
 
 import (
 	"io"
@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 )
-
-const ConnUUIDLen = 8
 
 type TCPConn struct {
 	t    time.Time
@@ -17,6 +15,12 @@ type TCPConn struct {
 type TCPConnMap struct {
 	conns map[string]TCPConn
 	mu    sync.RWMutex
+}
+
+func NewTCPConnMap() TCPConnMap {
+	return TCPConnMap{
+		conns: make(map[string]TCPConn),
+	}
 }
 
 func (c *TCPConnMap) Add(id string, conn net.Conn) {
@@ -38,8 +42,6 @@ func (c *TCPConnMap) Get(id string) (io.ReadWriteCloser, bool) {
 func (c *TCPConnMap) Del(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// TODO: why there don't need to close conn?
-	// c.conns[id].conn.Close()
 	delete(c.conns, id)
 }
 
@@ -58,29 +60,4 @@ func (c *TCPConnMap) StartAutoExpire() {
 	for range ticker.C {
 		expire()
 	}
-}
-
-type UDPConnMap struct {
-	conns map[string]*net.UDPConn
-	mu    sync.Mutex
-}
-
-func (c *UDPConnMap) Add(id string, conn *net.UDPConn) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.conns[id] = conn
-}
-
-func (c *UDPConnMap) Get(id string) (*net.UDPConn, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	conn, ok := c.conns[id]
-	return conn, ok
-}
-
-func (c *UDPConnMap) Del(id string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.conns[id].Close()
-	delete(c.conns, id)
 }

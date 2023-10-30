@@ -29,7 +29,6 @@ func (s *Server) startAdmin() {
 		}
 	})
 
-	logger.Infof("admin server started on port %d", s.cfg.AdminPort)
 	if err := http.ListenAndServe(":"+strconv.Itoa(s.cfg.AdminPort), nil); err != nil {
 		logger.Fatalf("admin server error: %v", err)
 	}

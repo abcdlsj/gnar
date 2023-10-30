@@ -5,10 +5,11 @@ import (
 
 	"github.com/abcdlsj/pipe/client"
 	"github.com/abcdlsj/pipe/server"
+	"github.com/abcdlsj/pipe/share"
 	"github.com/spf13/cobra"
 )
 
-func Execute(gitHash, buildStamp string) {
+func Execute() {
 	var RootCmd = &cobra.Command{
 		Use:  "pipe",
 		Long: "pipe is a proxy tool.",
@@ -20,7 +21,7 @@ func Execute(gitHash, buildStamp string) {
 	RootCmd.AddCommand(server.Command())
 	RootCmd.AddCommand(client.Command())
 
-	RootCmd.Version = fmt.Sprintf("v0.0.1-%s; buildstamp %s", gitHash, buildStamp)
+	RootCmd.Version = fmt.Sprintf("%s; buildstamp %s", share.GetVersion(), share.BuildStamp)
 
 	RootCmd.Execute()
 }

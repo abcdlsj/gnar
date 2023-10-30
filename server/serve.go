@@ -13,6 +13,7 @@ import (
 	"github.com/abcdlsj/pipe/proto"
 	"github.com/abcdlsj/pipe/proxy"
 	"github.com/abcdlsj/pipe/server/conn"
+	"github.com/abcdlsj/pipe/share"
 	"github.com/google/uuid"
 )
 
@@ -48,7 +49,7 @@ func (s *Server) Run() {
 	}
 	defer listener.Close()
 
-	logger.Infof("Server listen on port %d", s.cfg.Port)
+	logger.Infof("Server listening on port %d", s.cfg.Port)
 
 	for {
 		conn, err := listener.Accept()
@@ -76,6 +77,10 @@ func (s *Server) handle(conn net.Conn) {
 		logger.Errorf("Invalid token, client addr: %s", conn.RemoteAddr().String())
 		conn.Close()
 		return
+	}
+
+	if share.GetVersion() != loginMsg.Version {
+		logger.Warnf("Client version not match, client addr: %s", conn.RemoteAddr().String())
 	}
 
 	logger.Debugf("Auth success, client addr: %s", conn.RemoteAddr().String())

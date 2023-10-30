@@ -1,5 +1,5 @@
 all:
-	go build -ldflags "-X main.buildStamp=`date +'%Y-%m-%d_%H:%M.%S'` -X main.gitHash=`git rev-parse --short HEAD`"
+	go build -ldflags "-X github.com/abcdlsj/pipe/share.BuildStamp=`date +'%Y-%m-%d_%H:%M.%S'` -X github.com/abcdlsj/pipe/share.GitHash=`git rev-parse --short HEAD`"
 
 clean:
 	rm -f ./pipe

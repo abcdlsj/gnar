@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/abcdlsj/pipe/share"
 )
 
 type Msg interface {
@@ -55,7 +57,7 @@ func NewMsgHeartbeat() *MsgHeartbeat {
 
 type MsgLogin struct {
 	Token     string `json:"token"`
-	Version   string `json:"client_version"`
+	Version   string `json:"version"`
 	Timestamp int64  `json:"timestamp"`
 }
 
@@ -70,7 +72,7 @@ func NewMsgLogin(token string) *MsgLogin {
 
 	return &MsgLogin{
 		Token:     fmt.Sprintf("%x", hash.Sum(nil)),
-		Version:   "0.0.1",
+		Version:   share.GetVersion(),
 		Timestamp: ts,
 	}
 }

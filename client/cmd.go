@@ -6,10 +6,8 @@ import (
 
 func Command() *cobra.Command {
 	var (
-		svrAddr   string
 		lport     int
 		fport     int
-		token     string
 		subdomain string
 		proxyName string
 		proxyType string
@@ -31,8 +29,6 @@ func Command() *cobra.Command {
 					ProxyName:  proxyName,
 					ProxyType:  proxyType,
 				}
-				flagCfg.SvrAddr = svrAddr
-				flagCfg.Token = token
 
 				newClient(flagCfg).Run()
 			}
@@ -41,14 +37,15 @@ func Command() *cobra.Command {
 
 	flagCfg.Forwards = make([]Forward, 1)
 
-	cfg.PersistentFlags().StringVarP(&svrAddr, "server-addr", "s", "localhost:8910", "server addr")
+	cfg.PersistentFlags().StringVarP(&flagCfg.SvrAddr, "server-addr", "s", "localhost:8910", "server addr")
 	cfg.PersistentFlags().IntVarP(&fport, "forward-port", "u", 0, "forward port")
 	cfg.PersistentFlags().IntVarP(&lport, "local-port", "l", 0, "local port")
-	cfg.PersistentFlags().StringVarP(&token, "token", "t", "", "token")
+	cfg.PersistentFlags().StringVarP(&flagCfg.Token, "token", "t", "", "token")
 	cfg.PersistentFlags().StringVarP(&subdomain, "subdomain", "d", "", "subdomain")
 	cfg.PersistentFlags().StringVarP(&proxyName, "proxy-name", "n", "", "proxy name")
 	cfg.PersistentFlags().StringVarP(&proxyType, "proxy-type", "y", "tcp", "forward protocol type")
 	cfg.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
+	cfg.PersistentFlags().BoolVarP(&flagCfg.Multiple, "multiple", "m", false, "multiple server")
 
 	return cfg
 }

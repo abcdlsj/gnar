@@ -15,6 +15,7 @@ import (
 	"github.com/abcdlsj/pipe/server/conn"
 	"github.com/abcdlsj/pipe/share"
 	"github.com/google/uuid"
+	"github.com/hashicorp/yamux"
 )
 
 type Server struct {
@@ -58,7 +59,106 @@ func (s *Server) Run() {
 			return
 		}
 
+		if s.cfg.Multiple {
+			go func() {
+				session := s.yamuxSession(conn)
+				if session == nil {
+					return
+				}
+				for {
+					stream, err := session.AcceptStream()
+					if err != nil {
+						logger.Errorf("Error accepting stream: %v", err)
+						return
+					}
+					logger.Debugf("New yamux connection, client addr: %s", conn.RemoteAddr().String())
+
+					go s.yamuxHandle(stream)
+				}
+			}()
+			continue
+		}
+
 		go s.handle(conn)
+	}
+}
+
+func (s *Server) yamuxSession(conn net.Conn) *yamux.Session {
+	loginMsg := proto.MsgLogin{}
+	if err := proto.Recv(conn, &loginMsg); err != nil {
+		logger.Errorf("Error reading from connection: %v", err)
+		conn.Close()
+		return nil
+	}
+
+	hash := md5.New()
+	hash.Write([]byte(s.cfg.Token + fmt.Sprintf("%d", loginMsg.Timestamp)))
+
+	if fmt.Sprintf("%x", hash.Sum(nil)) != loginMsg.Token {
+		logger.Errorf("Invalid token, client addr: %s", conn.RemoteAddr().String())
+		conn.Close()
+		return nil
+	}
+
+	if share.GetVersion() != loginMsg.Version {
+		logger.Warnf("Client version not match, client addr: %s", conn.RemoteAddr().String())
+	}
+
+	logger.Debugf("Yamux session auth success, client addr: %s", conn.RemoteAddr().String())
+
+	session, err := yamux.Server(conn, nil)
+	if err != nil {
+		logger.Errorf("Error creating yamux session: %v", err)
+		conn.Close()
+		return nil
+	}
+
+	return session
+}
+
+func (s *Server) yamuxHandle(conn net.Conn) {
+	pt, buf, err := proto.Read(conn)
+	if err != nil {
+		logger.Errorf("Error reading from connection: %v", err)
+		return
+	}
+
+	switch pt {
+	case proto.PacketForwardReq:
+		failChan := make(chan struct{})
+		defer close(failChan)
+
+		go func() {
+			<-failChan
+			if err := proto.Send(conn, proto.NewMsgForwardResp("", "failed")); err != nil {
+				logger.Errorf("Error sending forward failed resp message: %v", err)
+			}
+		}()
+
+		msg := &proto.MsgForwardReq{}
+		if err := json.Unmarshal(buf, msg); err != nil {
+			logger.Errorf("Error unmarshalling message: %v", err)
+			return
+		}
+
+		s.handleForward(conn, msg, failChan)
+	case proto.PacketExchange:
+		msg := &proto.MsgExchange{}
+		if err := json.Unmarshal(buf, msg); err != nil {
+			logger.Errorf("Error unmarshalling message: %v", err)
+			return
+		}
+
+		s.handleExchange(conn, msg)
+	case proto.PacketForwardCancel:
+		defer conn.Close()
+		msg := &proto.MsgForwardCancel{}
+		if err := json.Unmarshal(buf, msg); err != nil {
+			logger.Errorf("Error unmarshalling message: %v", err)
+			return
+		}
+
+		s.handleCancel(msg)
 	}
 }
 

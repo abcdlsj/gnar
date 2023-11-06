@@ -9,12 +9,30 @@ prebuild_startpy:
 	killall pipe || true
 	killall Python || true
 	python3 -m http.server 3000 &
+
+test_kill:
+	killall pipe || true
+	killall Python || true
 	
 test_simple: prebuild_startpy
 	./pipe server -t 'make test' 2>&1 /dev/null &
 	sleep 1
 
 	./pipe client -s 127.0.0.1:8910 -l 3000 -u 9100 -t 'make test' 2>&1 /dev/null &
+	sleep 1
+
+	curl -I http://127.0.0.1:9100
+
+	sleep 5
+
+	killall pipe || true
+	killall Python || true
+
+test_simple_yamux: prebuild_startpy
+	./pipe server -t 'make test' -m 2>&1 /dev/null &
+	sleep 1
+
+	./pipe client -s 127.0.0.1:8910 -l 3000 -u 9100 -t 'make test' -m 2>&1 /dev/null &
 	sleep 1
 
 	curl -I http://127.0.0.1:9100

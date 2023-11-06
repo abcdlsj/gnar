@@ -3,16 +3,19 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/abcdlsj/pipe/logger"
 	"github.com/abcdlsj/pipe/pio"
 	"github.com/abcdlsj/pipe/proto"
 	"github.com/abcdlsj/pipe/proxy"
+	"github.com/hashicorp/yamux"
 )
 
 type Client struct {
@@ -29,6 +32,9 @@ type Forwarder struct {
 	speedLimit string
 	proxyType  string
 	logger     *logger.Logger
+	session    *yamux.Session
+
+	mu sync.Mutex
 }
 
 func newClient(cfg Config) *Client {
@@ -37,13 +43,13 @@ func newClient(cfg Config) *Client {
 	}
 }
 
-func newForwarder(svraddr string, token string, f Forward) *Forwarder {
+func newForwarder(svraddr string, token string, multiple bool, f Forward) *Forwarder {
 	logPrefix := fmt.Sprintf("%s[%d:%d]", strings.ToUpper(f.ProxyType), f.LocalPort, f.RemotePort)
 	if f.ProxyName != "" {
 		logPrefix = fmt.Sprintf("%s[%s]", strings.ToUpper(f.ProxyType), f.ProxyName)
 	}
 
-	return &Forwarder{
+	forwarder := &Forwarder{
 		token:      token,
 		svraddr:    svraddr,
 		proxyName:  f.ProxyName,
@@ -53,7 +59,43 @@ func newForwarder(svraddr string, token string, f Forward) *Forwarder {
 		speedLimit: f.SpeedLimit,
 		proxyType:  f.ProxyType,
 		logger:     logger.New(logPrefix),
+		session:    nil,
 	}
+
+	if multiple {
+		var err error
+		forwarder.session, err = authNewSession(svraddr, token)
+		if err != nil {
+			forwarder.logger.Fatalf("Error connecting to remote: %v", err)
+		}
+	}
+
+	return forwarder
+}
+
+func (f *Forwarder) cancel() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var stream io.Writer
+	var err error
+
+	if f.session != nil {
+		stream, err = f.session.OpenStream()
+		if err != nil {
+			f.logger.Warnf("Error opening stream: %v", err)
+		}
+		logger.Debugf("Open stream to server, local port: %d, remote port: %d", f.localPort, f.remotePort)
+	} else {
+		stream, err = authDialSvr(f.svraddr, f.token)
+		if err != nil {
+			f.logger.Fatalf("Error connecting to remote: %v", err)
+		}
+	}
+	if err = proto.Send(stream, proto.NewMsgCancel(f.token, f.proxyName, f.remotePort)); err != nil {
+		logger.Fatalf("Error sending cancel msg to remote: %v", err)
+	}
+	logger.Infof("Close connection to server, local port: %d, remote port: %d", f.localPort, f.remotePort)
 }
 
 func (c *Client) Run() {
@@ -61,15 +103,40 @@ func (c *Client) Run() {
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
+	cancelFns := make([]func(), 0)
 	for _, forward := range c.cfg.Forwards {
-		go newForwarder(c.cfg.SvrAddr, c.cfg.Token, forward).Run()
+		forwarder := newForwarder(c.cfg.SvrAddr, c.cfg.Token, c.cfg.Multiple, forward)
+		go forwarder.Run()
+
+		cancelFns = append(cancelFns, func() {
+			forwarder.cancel()
+		})
 	}
 
-	<-sc
-	logger.Info("Receive signal to shutdown")
-	for _, f := range c.cfg.Forwards {
-		cancelForward(c.cfg.Token, c.cfg.SvrAddr, f.ProxyName, f.LocalPort, f.RemotePort)
+	logger.Infof("Receive signal %s to shutdown", <-sc)
+
+	for _, cancelFn := range cancelFns {
+		cancelFn()
 	}
+
+	logger.Info("Shutdown success")
+}
+
+func authNewSession(svraddr string, token string) (*yamux.Session, error) {
+	conn, err := net.Dial("tcp", svraddr)
+	if err != nil {
+		return nil, err
+	}
+	if err = proto.Send(conn, proto.NewMsgLogin(token)); err != nil {
+		return nil, err
+	}
+
+	session, err := yamux.Client(conn, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return session, nil
 }
 
 func authDialSvr(svraddr string, token string) (net.Conn, error) {
@@ -85,8 +152,18 @@ func authDialSvr(svraddr string, token string) (net.Conn, error) {
 	return conn, nil
 }
 
+func (f *Forwarder) newSvrConn() (net.Conn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.session != nil {
+		return f.session.OpenStream()
+	}
+	return authDialSvr(f.svraddr, f.token)
+}
+
 func (f *Forwarder) Run() {
-	rConn, err := authDialSvr(f.svraddr, f.token)
+	rConn, err := f.newSvrConn()
 	if err != nil {
 		f.logger.Fatalf("Error connecting to remote: %v", err)
 	}
@@ -116,6 +193,7 @@ func (f *Forwarder) Run() {
 		p, buf, err := proto.Read(rConn)
 		if err != nil {
 			f.logger.Errorf("Error reading msg from remote: %v", err)
+			f.cancel()
 			return
 		}
 
@@ -125,7 +203,7 @@ func (f *Forwarder) Run() {
 			msg := &proto.MsgExchange{}
 			if err := json.Unmarshal(buf, msg); err != nil {
 				nlogger.Errorf("Error reading exchange msg from remote: %v", err)
-				cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
+				f.cancel()
 				return
 			}
 
@@ -133,15 +211,15 @@ func (f *Forwarder) Run() {
 			case "udp":
 				go func() {
 					nlogger.Infof("Receive udp conn from server, start proxying, conn_id: %s", msg.ConnId)
-					nRconn, err := authDialSvr(f.svraddr, f.token)
+					nRconn, err := f.newSvrConn()
 					if err != nil {
 						nlogger.Errorf("Error connecting to remote: %v", err)
-						cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
 						return
 					}
 
 					if err = proto.Send(nRconn, proto.NewMsgExchange(msg.ConnId, f.proxyType)); err != nil {
 						nlogger.Infof("Error sending exchange msg to remote: %v", err)
+						return
 					}
 
 					lConn, err := net.DialUDP("udp", nil, &net.UDPAddr{
@@ -155,20 +233,20 @@ func (f *Forwarder) Run() {
 					}
 					if err := proxy.UDPClientStream(f.token, nRconn, lConn); err != nil {
 						nlogger.Errorf("Error proxying udp: %v", err)
-						cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
+						return
 					}
 				}()
 			case "tcp":
 				go func() {
 					nlogger.Infof("Receive user req from server, start proxying, conn_id: %s", msg.ConnId)
-					nRconn, err := authDialSvr(f.svraddr, f.token)
+					nRconn, err := f.newSvrConn()
 					if err != nil {
 						nlogger.Errorf("Error connecting to remote: %v", err)
-						cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
 						return
 					}
 					if err = proto.Send(nRconn, proto.NewMsgExchange(msg.ConnId, f.proxyType)); err != nil {
 						nlogger.Infof("Error sending exchange msg to remote: %v", err)
+						return
 					}
 					lConn, err := net.Dial(msg.ProxyType, fmt.Sprintf(":%d", f.localPort))
 					if err != nil {
@@ -189,22 +267,11 @@ func (f *Forwarder) Run() {
 			msg := &proto.MsgHeartbeat{}
 			if err := json.Unmarshal(buf, msg); err != nil {
 				nlogger.Errorf("Error reading heartbeat msg from remote: %v", err)
-				cancelForward(f.token, f.svraddr, f.proxyName, f.localPort, f.remotePort)
+				f.cancel()
 				return
 			}
 
 			nlogger.Debug("")
 		}
 	}
-}
-
-func cancelForward(token, svr, proxyName string, lport, rport int) {
-	rConn, err := authDialSvr(svr, token)
-	if err != nil {
-		logger.Fatalf("Error connecting to remote: %v", err)
-	}
-	if err = proto.Send(rConn, proto.NewMsgCancel(token, proxyName, rport)); err != nil {
-		logger.Fatalf("Error sending cancel msg to remote: %v", err)
-	}
-	logger.Infof("Close connection to server, local port: %d, remote port: %d", lport, rport)
 }

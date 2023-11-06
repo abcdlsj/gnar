@@ -10,6 +10,7 @@ import (
 type Config struct {
 	SvrAddr  string    `toml:"server-addr"`
 	Token    string    `toml:"token"`
+	Multiple bool      `toml:"multiple"`
 	Forwards []Forward `toml:"forwards"`
 }
 

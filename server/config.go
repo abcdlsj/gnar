@@ -13,6 +13,7 @@ type Config struct {
 	DomainTunnel bool   `toml:"domain-tunnel"` // enable domain tunnel
 	Domain       string `toml:"domain"`        // domain name
 	Token        string `toml:"token"`
+	Multiple     bool   `toml:"multiple"`
 }
 
 func parseConfig(cfgFile string) Config {

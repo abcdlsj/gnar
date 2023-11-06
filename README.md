@@ -29,14 +29,19 @@ Features:
 - [x] Supports forwarding from multiple clients
 - [x] Includes token-based authentication for added security
 - [x] Server-side admin panel (currently, it's simple)
-- [x] Can run at `fly.io`
+- [x] Integration of yamux for multiplexing connections
+- [x] Support `UDP` traffic forward
+- [x] Can deploy at `fly.io`
+
 
 Future Plans:
 
 - [ ] Daemon mode for background execution
 - [ ] Smooth upgrade (upgrade client/server version)
-- [ ] Integration of yamux for multiplexing connections
 - [ ] Add metrics (bandwidths/upward and downward)
+- [x] Integration of yamux for multiplexing connections
+- [x] Support `UDP` traffic forward
+- [x] Can deploy at `fly.io`
 
 <!-- TOC --><a name="install"></a>
 ## Install

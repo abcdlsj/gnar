@@ -23,7 +23,7 @@ func (s *Server) startAdmin() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
-			"forwards": s.forwards,
+			"proxys": s.proxys,
 		}); err != nil {
 			logger.Errorf("execute index.html error: %v", err)
 		}

@@ -30,7 +30,6 @@ Features:
 - [x] Includes token-based authentication for added security
 - [x] Server-side admin panel (currently, it's simple)
 - [x] Integration of yamux for multiplexing connections
-- [x] Support `UDP` traffic forward
 - [x] Can deploy at `fly.io`
 
 
@@ -82,19 +81,19 @@ Usage:
 
 Flags:
   -c, --config string        config file
-  -u, --forward-port int     forward port
   -h, --help                 help for client
   -l, --local-port int       local port
+  -m, --multiplex            multiplex client/server control connection
   -n, --proxy-name string    proxy name
+  -u, --proxy-port int       proxy port
+  -y, --proxy-type string    proxy transport protocol type (default "tcp")
   -s, --server-addr string   server addr (default "localhost:8910")
   -d, --subdomain string     subdomain
   -t, --token string         token
-  -y, --type string          forward protocol type (default "tcp")
 ```
 
 <!-- TOC --><a name="server"></a>
 ## Server 
-```
 Usage:
   pipe server [flags]
 
@@ -104,6 +103,7 @@ Flags:
   -D, --domain string    domain name
   -d, --domain-tunnel    enable domain tunnel
   -h, --help             help for server
+  -m, --multiplex        multiplex client/server control connection
   -p, --port int         server port (default 8910)
   -t, --token string     token
 ```
@@ -125,7 +125,7 @@ Client
 ```
 # start a service
 python3 -m http.server 3000
-# start forward
+# start proxy
 pipe client -s localhost:8910 -l 3000 -u 9001
 ```
 

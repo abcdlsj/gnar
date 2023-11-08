@@ -77,19 +77,19 @@ func NewMsgLogin(token string) *MsgLogin {
 	}
 }
 
-type MsgForwardReq struct {
+type MsgProxyReq struct {
 	RemotePort int    `json:"remote_port"`
 	ProxyName  string `json:"proxy_name"`
 	Subdomain  string `json:"subdomain"`
 	ProxyType  string `json:"proxy_type"`
 }
 
-func (m *MsgForwardReq) Type() PacketType {
-	return PacketForwardReq
+func (m *MsgProxyReq) Type() PacketType {
+	return PacketProxyReq
 }
 
-func NewMsgForward(proxyName, subdomain, proxyType string, remotePort int) *MsgForwardReq {
-	return &MsgForwardReq{
+func NewMsgProxy(proxyName, subdomain, proxyType string, remotePort int) *MsgProxyReq {
+	return &MsgProxyReq{
 		ProxyName:  proxyName,
 		Subdomain:  subdomain,
 		RemotePort: remotePort,
@@ -97,36 +97,36 @@ func NewMsgForward(proxyName, subdomain, proxyType string, remotePort int) *MsgF
 	}
 }
 
-type MsgForwardResp struct {
+type MsgProxyResp struct {
 	Domain string `json:"domain"`
 	Status string `json:"status"`
 }
 
-func (m *MsgForwardResp) Type() PacketType {
-	return PacketForwardResp
+func (m *MsgProxyResp) Type() PacketType {
+	return PacketProxyResp
 }
 
-func NewMsgForwardResp(domain, status string) *MsgForwardResp {
-	return &MsgForwardResp{
+func NewMsgProxyResp(domain, status string) *MsgProxyResp {
+	return &MsgProxyResp{
 		Domain: domain,
 		Status: status,
 	}
 }
 
-type MsgForwardCancel struct {
+type NewProxyCancel struct {
 	ProxyName  string `json:"proxy_name"`
 	RemotePort int    `json:"remote_port"`
 }
 
-func NewMsgCancel(token, proxyName string, remotePort int) *MsgForwardCancel {
-	return &MsgForwardCancel{
+func NewMsgCancel(token, proxyName string, remotePort int) *NewProxyCancel {
+	return &NewProxyCancel{
 		ProxyName:  proxyName,
 		RemotePort: remotePort,
 	}
 }
 
-func (m *MsgForwardCancel) Type() PacketType {
-	return PacketForwardCancel
+func (m *NewProxyCancel) Type() PacketType {
+	return PacketProxyCancel
 }
 
 type MsgExchange struct {

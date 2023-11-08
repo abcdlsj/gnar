@@ -26,7 +26,7 @@ func Command() *cobra.Command {
 	cmd.PersistentFlags().StringVarP(&flagCfg.Domain, "domain", "D", "", "domain name")
 	cmd.PersistentFlags().StringVarP(&flagCfg.Token, "token", "t", "", "token")
 	cmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
-	cmd.PersistentFlags().BoolVarP(&flagCfg.Multiple, "multiple", "m", false, "multiple server")
+	cmd.PersistentFlags().BoolVarP(&flagCfg.Multiplex, "multiplex", "m", false, "multiplex client/server control connection")
 
 	return cmd
 }

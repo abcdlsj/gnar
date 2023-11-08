@@ -1,7 +1,7 @@
 server-addr = "localhost:8910"
 token = "abcdlsj" # optional
 
-[[forwards]]
+[[proxys]]
 proxy-name = "python_http_file_service" # optional
 subdomain = "python3-http" # optional
 local-port = 3000
@@ -9,7 +9,7 @@ remote-port = 9001
 speed-limit = "100kb"
 proxy-type = "tcp"
 
-[[forwards]]
+[[proxys]]
 local-port = 3001
 remote-port = 9002
 proxy-type = "tcp"

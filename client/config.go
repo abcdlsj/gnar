@@ -8,13 +8,13 @@ import (
 )
 
 type Config struct {
-	SvrAddr  string    `toml:"server-addr"`
-	Token    string    `toml:"token"`
-	Multiple bool      `toml:"multiple"`
-	Forwards []Forward `toml:"forwards"`
+	SvrAddr   string  `toml:"server-addr"`
+	Token     string  `toml:"token"`
+	Multiplex bool    `toml:"multiplex"`
+	Proxys    []Proxy `toml:"proxys"`
 }
 
-type Forward struct {
+type Proxy struct {
 	ProxyName  string `toml:"proxy-name"`
 	Subdomain  string `toml:"subdomain"`
 	RemotePort int    `toml:"remote-port"`

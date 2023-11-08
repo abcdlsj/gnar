@@ -8,14 +8,14 @@ import (
 type PacketType byte
 
 var (
-	PacketUnknown       = PacketType(0x00)
-	PacketLogin         = PacketType(0x01)
-	PacketHeartbeat     = PacketType(0x02)
-	PacketForwardReq    = PacketType(0x03)
-	PacketForwardResp   = PacketType(0x04)
-	PacketForwardCancel = PacketType(0x05)
-	PacketExchange      = PacketType(0x06)
-	PacketUDPDatagram   = PacketType(0x07)
+	PacketUnknown     = PacketType(0x00)
+	PacketLogin       = PacketType(0x01)
+	PacketHeartbeat   = PacketType(0x02)
+	PacketProxyReq    = PacketType(0x03)
+	PacketProxyResp   = PacketType(0x04)
+	PacketProxyCancel = PacketType(0x05)
+	PacketExchange    = PacketType(0x06)
+	PacketUDPDatagram = PacketType(0x07)
 )
 
 func (p PacketType) String() string {
@@ -24,12 +24,12 @@ func (p PacketType) String() string {
 		return "login"
 	case PacketHeartbeat:
 		return "hbeat"
-	case PacketForwardReq:
-		return "freq"
-	case PacketForwardResp:
-		return "fresp"
-	case PacketForwardCancel:
-		return "fcancel"
+	case PacketProxyReq:
+		return "preq"
+	case PacketProxyResp:
+		return "presp"
+	case PacketProxyCancel:
+		return "pcancel"
 	case PacketExchange:
 		return "exchan"
 	case PacketUDPDatagram:

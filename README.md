@@ -5,9 +5,8 @@
   - [Usage](#usage)
   - [Client](#client)
   - [Server](#server)
-    - [Server admin panel](#server-admin-panel)
-  - [Simple Start](#simple-start)
-  - [Deploy at `fly.io`](#deploy-at-flyio)
+- [start a service](#start-a-service)
+- [start proxy](#start-proxy)
   - [Subdomain proxy](#subdomain-proxy)
   - [Trubleshooting](#trubleshooting)
 
@@ -198,7 +197,7 @@ A example.com <your server ip> (`@` is ok too)
 
 4. start pipe client
 ```
-./pipe client -s localhost -p 8910 -l 3000 -u 9001
+./pipe client -s localhost:8910 -l 3000 -u 9001
 ```
 
 5. now you can find the subdomain in server log, like this

@@ -41,9 +41,9 @@ type Logger struct {
 	logger  *log.Logger
 }
 
-func New(prefix string) *Logger {
+func New(prefixs ...string) *Logger {
 	return &Logger{
-		prefixs: []string{prefix},
+		prefixs: prefixs,
 		logger:  log.New(os.Stderr, "", log.LstdFlags),
 	}
 }
@@ -59,27 +59,27 @@ func (l *Logger) CloneAdd(prefix string) *Logger {
 	}
 }
 
-var defalt *Logger
+var dflat *Logger
 
 func init() {
 	if os.Getenv("DEBUG") != "" {
 		SetLevel(DEBUG)
 	}
 
-	defalt = New("[GLOBAL]")
+	dflat = New()
 }
 
-var globalLevel = INFO
+var gLevel = INFO
 
 func SetLevel(level Level) {
-	globalLevel = level
+	gLevel = level
 }
 
 func header(prefixs []string, level Level) string {
 	rainbow := []func(string) string{
+		cr.PLGreen,
 		cr.PLYellow,
 		cr.PLBlue,
-		cr.PLGreen,
 		cr.PLCyan,
 		cr.PLMagenta,
 	}
@@ -103,7 +103,7 @@ func builderf(logger *log.Logger, prefixs []string, level Level, format string, 
 	if level == FATAL {
 		logger.Fatalf(header(prefixs, level)+format, v...)
 	}
-	if globalLevel <= level {
+	if gLevel <= level {
 		logger.Printf(header(prefixs, level)+format, v...)
 	}
 }
@@ -112,7 +112,7 @@ func builder(logger *log.Logger, prefixs []string, level Level, v ...interface{}
 	if level == FATAL {
 		logger.Fatalf(header(prefixs, level) + fmt.Sprintln(v...))
 	}
-	if globalLevel <= level {
+	if gLevel <= level {
 		logger.Print(header(prefixs, level) + fmt.Sprintln(v...))
 	}
 }
@@ -158,41 +158,41 @@ func (l *Logger) Fatal(v ...interface{}) {
 }
 
 func Debugf(format string, v ...interface{}) {
-	defalt.Debugf(format, v...)
+	dflat.Debugf(format, v...)
 }
 
 func Infof(format string, v ...interface{}) {
-	defalt.Infof(format, v...)
+	dflat.Infof(format, v...)
 }
 
 func Warnf(format string, v ...interface{}) {
-	defalt.Warnf(format, v...)
+	dflat.Warnf(format, v...)
 }
 
 func Errorf(format string, v ...interface{}) {
-	defalt.Errorf(format, v...)
+	dflat.Errorf(format, v...)
 }
 
 func Debug(v ...interface{}) {
-	defalt.Debug(v...)
+	dflat.Debug(v...)
 }
 
 func Info(v ...interface{}) {
-	defalt.Info(v...)
+	dflat.Info(v...)
 }
 
 func Warn(v ...interface{}) {
-	defalt.Warn(v...)
+	dflat.Warn(v...)
 }
 
 func Error(v ...interface{}) {
-	defalt.Error(v...)
+	dflat.Error(v...)
 }
 
 func Fatalf(format string, v ...interface{}) {
-	defalt.Fatalf(format, v...)
+	dflat.Fatalf(format, v...)
 }
 
 func Fatal(v ...interface{}) {
-	defalt.Fatal(v...)
+	dflat.Fatal(v...)
 }

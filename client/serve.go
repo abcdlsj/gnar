@@ -11,10 +11,9 @@ import (
 	"syscall"
 
 	"github.com/abcdlsj/pipe/client/control"
+	"github.com/abcdlsj/pipe/client/tunnel"
 	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/pio"
 	"github.com/abcdlsj/pipe/proto"
-	"github.com/abcdlsj/pipe/proxy"
 )
 
 type Client struct {
@@ -30,7 +29,7 @@ type Proxyer struct {
 	subdomain  string
 	speedLimit string
 	proxyType  string
-	ctrlDialer control.Dialer
+	ctrlDialer control.AuthSvrDialer
 	logger     *logger.Logger
 
 	mu sync.Mutex
@@ -43,9 +42,9 @@ func newClient(cfg Config) *Client {
 }
 
 func newProxyer(svraddr string, token string, mux bool, f Proxy) *Proxyer {
-	logPrefix := fmt.Sprintf("%s[%d:%d]", strings.ToUpper(f.ProxyType), f.LocalPort, f.RemotePort)
+	logPrefix := fmt.Sprintf("%s [%d:%d]", strings.ToUpper(f.ProxyType), f.LocalPort, f.RemotePort)
 	if f.ProxyName != "" {
-		logPrefix = fmt.Sprintf("%s[%s]", strings.ToUpper(f.ProxyType), f.ProxyName)
+		logPrefix = fmt.Sprintf("%s [%s]", strings.ToUpper(f.ProxyType), f.ProxyName)
 	}
 
 	proxyer := &Proxyer{
@@ -72,7 +71,7 @@ func (f *Proxyer) cancel() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	conn, err := f.ctrlDialer.OpenSvrConn()
+	conn, err := f.ctrlDialer.Open()
 	if err != nil {
 		logger.Fatalf("Error connecting to remote: %v", err)
 	}
@@ -108,31 +107,12 @@ func (c *Client) Run() {
 }
 
 func (f *Proxyer) Run() {
-	rConn, err := f.ctrlDialer.OpenSvrConn()
+	rConn, err := f.ctrlDialer.Open()
 	if err != nil {
-		f.logger.Fatalf("Error connecting to remote: %v", err)
+		f.logger.Fatalf("Error open svr connection to remote: %v", err)
 	}
 
-	if err = proto.Send(rConn, proto.NewMsgProxy(f.proxyName, f.subdomain,
-		f.proxyType, f.remotePort)); err != nil {
-
-		f.logger.Fatalf("Error send proxy msg to remote: %v", err)
-	}
-
-	pxyResp := &proto.MsgProxyResp{}
-	if err = proto.Recv(rConn, pxyResp); err != nil {
-		f.logger.Fatal("Error reading proxy resp msg from remote, please check your config")
-	}
-
-	if pxyResp.Status != "success" {
-		f.logger.Fatalf("Proxy failed, status: %s, remote port: %d", pxyResp.Status, f.remotePort)
-	}
-
-	if pxyResp.Domain != "" {
-		f.logger.Infof("Proxy success, remote port: %d, domain: %s", f.remotePort, pxyResp.Domain)
-	} else {
-		f.logger.Infof("Proxy success, remote port: %d", f.remotePort)
-	}
+	f.mustNewProxy(rConn)
 
 	for {
 		p, buf, err := proto.Read(rConn)
@@ -152,62 +132,7 @@ func (f *Proxyer) Run() {
 				return
 			}
 
-			switch msg.ProxyType {
-			case "udp":
-				go func() {
-					nlogger.Infof("Receive udp conn from server, start proxying, conn_id: %s", msg.ConnId)
-					nRconn, err := f.ctrlDialer.OpenSvrConn()
-					if err != nil {
-						nlogger.Errorf("Error connecting to remote: %v", err)
-						return
-					}
-
-					if err = proto.Send(nRconn, proto.NewMsgExchange(msg.ConnId, f.proxyType)); err != nil {
-						nlogger.Infof("Error sending exchange msg to remote: %v", err)
-						return
-					}
-
-					lConn, err := net.DialUDP("udp", nil, &net.UDPAddr{
-						IP:   net.ParseIP("0.0.0.0"),
-						Port: f.localPort,
-					})
-
-					if err != nil {
-						nlogger.Errorf("Error connecting to local: %v, will close proxy, %s:%d", err, f.proxyType, f.localPort)
-						return
-					}
-					if err := proxy.UDPClientStream(f.token, nRconn, lConn); err != nil {
-						nlogger.Errorf("Error proxying udp: %v", err)
-						return
-					}
-				}()
-			case "tcp":
-				go func() {
-					nlogger.Infof("Receive user req from server, start proxying, conn_id: %s", msg.ConnId)
-					nRconn, err := f.ctrlDialer.OpenSvrConn()
-					if err != nil {
-						nlogger.Errorf("Error connecting to remote: %v", err)
-						return
-					}
-					if err = proto.Send(nRconn, proto.NewMsgExchange(msg.ConnId, f.proxyType)); err != nil {
-						nlogger.Infof("Error sending exchange msg to remote: %v", err)
-						return
-					}
-					lConn, err := net.Dial(msg.ProxyType, fmt.Sprintf(":%d", f.localPort))
-					if err != nil {
-						nlogger.Errorf("Error connecting to local: %v, will close proxy, %s:%d", err, f.proxyType, f.localPort)
-						return
-					}
-
-					if f.speedLimit != "" {
-						limit := pio.LimitTransfer(f.speedLimit)
-						nlogger.Debugf("Proxying with limit: %s, transfered limit: %d", f.speedLimit, limit)
-						proxy.Stream(pio.NewLimitStream(lConn, limit), nRconn)
-					} else {
-						proxy.Stream(lConn, nRconn)
-					}
-				}()
-			}
+			f.handleExchange(msg, nlogger)
 		case proto.PacketHeartbeat:
 			msg := &proto.MsgHeartbeat{}
 			if err := json.Unmarshal(buf, msg); err != nil {
@@ -218,5 +143,44 @@ func (f *Proxyer) Run() {
 
 			nlogger.Debug("")
 		}
+	}
+}
+
+func (f *Proxyer) handleExchange(msg *proto.MsgExchange, nlogger *logger.Logger) {
+	nlogger.Infof("Receive udp conn from server, start proxying, conn_id: %s", msg.ConnId)
+	rConn, err := f.ctrlDialer.Open()
+	if err != nil {
+		nlogger.Errorf("Error connecting to remote: %v", err)
+		return
+	}
+
+	if err = proto.Send(rConn, proto.NewMsgExchange(msg.ConnId, f.proxyType)); err != nil {
+		nlogger.Infof("Error sending exchange msg to remote: %v", err)
+		return
+	}
+
+	go tunnel.RunTunnel(f.localPort, msg.ProxyType, f.speedLimit, nlogger, rConn)
+}
+
+func (f *Proxyer) mustNewProxy(rConn net.Conn) {
+
+	if err := proto.Send(rConn, proto.NewMsgProxy(f.proxyName, f.subdomain,
+		f.proxyType, f.remotePort)); err != nil {
+		f.logger.Fatalf("Error send proxy msg to remote: %v", err)
+	}
+
+	pxyResp := &proto.MsgProxyResp{}
+	if err := proto.Recv(rConn, pxyResp); err != nil {
+		f.logger.Fatal("Error reading proxy resp msg from remote, please check your config")
+	}
+
+	if pxyResp.Status != "success" {
+		f.logger.Fatalf("Proxy failed, status: %s, remote port: %d", pxyResp.Status, f.remotePort)
+	}
+
+	if pxyResp.Domain != "" {
+		f.logger.Infof("Proxy success, remote port: %d, domain: %s", f.remotePort, pxyResp.Domain)
+	} else {
+		f.logger.Infof("Proxy success, remote port: %d", f.remotePort)
 	}
 }

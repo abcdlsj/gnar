@@ -9,7 +9,7 @@ import (
 	"github.com/abcdlsj/pipe/proto"
 )
 
-func UDPClientStream(token string, tcp, udp io.ReadWriteCloser) error {
+func UDPClientDatagram(tcp, udp io.ReadWriteCloser) error {
 	go func() {
 		for {
 			msg := proto.MsgUDPDatagram{}
@@ -45,7 +45,8 @@ func UDPClientStream(token string, tcp, udp io.ReadWriteCloser) error {
 		}
 	}
 }
-func UDPDatagram(token string, tcp io.ReadWriteCloser, udp *net.UDPConn) error {
+
+func UDPDatagram(tcp io.ReadWriteCloser, udp *net.UDPConn) error {
 	for {
 		buf := make([]byte, 4096)
 		n, addr, err := udp.ReadFromUDP(buf)

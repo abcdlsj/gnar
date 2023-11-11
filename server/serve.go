@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,6 +25,7 @@ type Server struct {
 	tcpConnMap    conn.TCPConnMap
 	udpConnMap    conn.UDPConnMap
 	portManager   map[int]bool
+	domainManager map[string]bool
 	authenticator auth.Authenticator
 	proxys        []Proxy
 
@@ -36,6 +38,7 @@ func newServer(cfg Config) *Server {
 		tcpConnMap:    conn.NewTCPConnMap(),
 		udpConnMap:    conn.NewUDPConnMap(),
 		portManager:   make(map[int]bool),
+		domainManager: make(map[string]bool),
 		authenticator: &auth.Nop{},
 	}
 
@@ -70,8 +73,12 @@ func (s *Server) Run() {
 
 		if s.cfg.Multiplex {
 			go func() {
-				session := s.muxSession(conn)
+				session, err := s.newMuxSession(conn)
 				if session == nil {
+					return
+				}
+				if err != nil {
+					logger.Errorf("Error creating yamux session: %v", err)
 					return
 				}
 				for {
@@ -82,47 +89,38 @@ func (s *Server) Run() {
 					}
 					logger.Debugf("New yamux connection, client addr: %s", conn.RemoteAddr().String())
 
-					go s.yamuxHandle(stream)
+					go s.handle(stream, true)
 				}
 			}()
 			continue
 		}
 
-		go s.handle(conn)
+		go s.handle(conn, false)
 	}
 }
 
-func (s *Server) muxSession(conn net.Conn) *yamux.Session {
-	loginMsg := proto.MsgLogin{}
-	if err := proto.Recv(conn, &loginMsg); err != nil {
-		logger.Errorf("Error reading from connection: %v", err)
-		conn.Close()
-		return nil
+func (s *Server) newMuxSession(conn net.Conn) (*yamux.Session, error) {
+	if err := checkConn(s.cfg.Token, conn); err != nil {
+		return nil, err
 	}
-
-	if !s.authenticator.VerifyLogin(&loginMsg) {
-		logger.Errorf("Invalid token, client addr: %s", conn.RemoteAddr().String())
-		conn.Close()
-		return nil
-	}
-
-	if share.GetVersion() != loginMsg.Version {
-		logger.Warnf("Client version not match, client addr: %s", conn.RemoteAddr().String())
-	}
-
-	logger.Debugf("Yamux session auth success, client addr: %s", conn.RemoteAddr().String())
 
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
 		logger.Errorf("Error creating yamux session: %v", err)
 		conn.Close()
-		return nil
+		return nil, err
 	}
 
-	return session
+	return session, nil
 }
 
-func (s *Server) yamuxHandle(conn net.Conn) {
+func (s *Server) handle(conn net.Conn, mux bool) {
+	if !mux {
+		if err := checkConn(s.cfg.Token, conn); err != nil {
+			return
+		}
+	}
+
 	pt, buf, err := proto.Read(conn)
 	if err != nil {
 		logger.Errorf("Error reading from connection: %v", err)
@@ -131,11 +129,11 @@ func (s *Server) yamuxHandle(conn net.Conn) {
 
 	switch pt {
 	case proto.PacketProxyReq:
-		failChan := make(chan struct{})
-		defer close(failChan)
+		failCh := make(chan struct{})
+		defer close(failCh)
 
 		go func() {
-			<-failChan
+			<-failCh
 			if err := proto.Send(conn, proto.NewMsgProxyResp("", "failed")); err != nil {
 				logger.Errorf("Error sending proxy failed resp message: %v", err)
 			}
@@ -147,7 +145,7 @@ func (s *Server) yamuxHandle(conn net.Conn) {
 			return
 		}
 
-		s.handleProxy(conn, msg, failChan)
+		s.handleProxy(conn, msg, failCh)
 	case proto.PacketExchange:
 		msg := &proto.MsgExchange{}
 		if err := json.Unmarshal(buf, msg); err != nil {
@@ -168,21 +166,19 @@ func (s *Server) yamuxHandle(conn net.Conn) {
 	}
 }
 
-func (s *Server) handle(conn net.Conn) {
+func checkConn(token string, conn net.Conn) error {
 	loginMsg := proto.MsgLogin{}
 	if err := proto.Recv(conn, &loginMsg); err != nil {
 		logger.Errorf("Error reading from connection: %v", err)
-		conn.Close()
-		return
+		return err
 	}
 
 	hash := md5.New()
-	hash.Write([]byte(s.cfg.Token + fmt.Sprintf("%d", loginMsg.Timestamp)))
+	hash.Write([]byte(token + fmt.Sprintf("%d", loginMsg.Timestamp)))
 
 	if fmt.Sprintf("%x", hash.Sum(nil)) != loginMsg.Token {
 		logger.Errorf("Invalid token, client addr: %s", conn.RemoteAddr().String())
-		conn.Close()
-		return
+		return fmt.Errorf("invalid token")
 	}
 
 	if share.GetVersion() != loginMsg.Version {
@@ -190,174 +186,167 @@ func (s *Server) handle(conn net.Conn) {
 	}
 
 	logger.Debugf("Auth success, client addr: %s", conn.RemoteAddr().String())
-
-	pt, buf, err := proto.Read(conn)
-	if err != nil {
-		logger.Errorf("Error reading from connection: %v", err)
-		return
-	}
-
-	switch pt {
-	case proto.PacketProxyReq:
-		failChan := make(chan struct{})
-		defer close(failChan)
-
-		go func() {
-			<-failChan
-			if err := proto.Send(conn, proto.NewMsgProxyResp("", "failed")); err != nil {
-				logger.Errorf("Error sending proxy failed resp message: %v", err)
-			}
-		}()
-
-		msg := &proto.MsgProxyReq{}
-		if err := json.Unmarshal(buf, msg); err != nil {
-			logger.Errorf("Error unmarshalling message: %v", err)
-			return
-		}
-
-		s.handleProxy(conn, msg, failChan)
-	case proto.PacketExchange:
-		msg := &proto.MsgExchange{}
-		if err := json.Unmarshal(buf, msg); err != nil {
-			logger.Errorf("Error unmarshalling message: %v", err)
-			return
-		}
-
-		s.handleExchange(conn, msg)
-	case proto.PacketProxyCancel:
-		defer conn.Close()
-		msg := &proto.NewProxyCancel{}
-		if err := json.Unmarshal(buf, msg); err != nil {
-			logger.Errorf("Error unmarshalling message: %v", err)
-			return
-		}
-
-		s.handleCancel(msg)
-	}
+	return nil
 }
 
 func (s *Server) handleCancel(msg *proto.NewProxyCancel) {
-	s.delProxy(msg.RemotePort)
+	s.removeProxy(msg.RemotePort)
 	logger.Infof("Proxy port %d canceled", msg.RemotePort)
 }
 
-func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failChan chan struct{}) {
+func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan struct{}) {
 	uPort := msg.RemotePort
-	if !s.availablePort(uPort) {
+	if !s.isVailablePort(uPort) {
 		logger.Errorf("Invalid proxy to port: %d", uPort)
-		failChan <- struct{}{}
+		failCh <- struct{}{}
 		return
 	}
 
-	from := cConn.RemoteAddr().String()
+	var domain string
+	var err error
+	if s.cfg.DomainTunnel {
+		domain, err = s.distrDomain(msg.Subdomain)
+		if err != nil {
+			logger.Errorf("Invalid subdomain: %s, err: %v", msg.Subdomain, err)
+			failCh <- struct{}{}
+			return
+		}
+
+		if err := addCaddyRouter(domain, uPort); err != nil {
+			logger.Errorf("Error adding caddy router: %v", err)
+			failCh <- struct{}{}
+			return
+		}
+	}
 
 	switch msg.ProxyType {
-	case "udp":
-		udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
-			IP:   net.ParseIP("0.0.0.0"),
-			Port: uPort,
-		})
-		if err != nil {
-			logger.Errorf("Error listening: %v, port: %d, type: %s", err, uPort, msg.ProxyType)
-			failChan <- struct{}{}
-			return
-		}
-		logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
-		s.addProxy(Proxy{
-			To:           uPort,
-			From:         from,
-			Subdomain:    msg.Subdomain,
-			listenCloser: udpListener,
-		})
-
-		logger.Infof("Receive proxy from %s to port %d", from, uPort)
-		logger.Infof("Send proxy accept msg to client: %s", from)
-		domain := fmt.Sprintf("%s.%s", msg.Subdomain, s.cfg.Domain)
-		if !s.cfg.DomainTunnel {
-			domain = ""
-		}
-
-		if err = proto.Send(cConn, proto.NewMsgProxyResp(domain, "success")); err != nil {
-			logger.Errorf("Error sending proxy accept message: %v", err)
-			failChan <- struct{}{}
-			return
-		}
-
-		go func() {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-
-			for range ticker.C {
-				if err := proto.Send(cConn, proto.NewMsgHeartbeat()); err != nil {
-					logger.Warnf("Error sending heartbeat message: %v, proxy to port: %d", err, uPort)
-					return
-				}
-			}
-		}()
-
-		uid := conn.NewUuid()
-		s.udpConnMap.Add(uid, udpListener)
-		if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
-			logger.Errorf("Error sending exchange message: %v", err)
-		}
-		logger.Debugf("Send udp listener to client, id: %s", uid)
 	case "tcp":
-		uListener, err := net.Listen("tcp", fmt.Sprintf(":%d", uPort))
+		err = s.handleTCPProxy(uPort, domain, cConn, msg)
+	case "udp":
+		err = s.handleUDPProxy(uPort, domain, cConn, msg)
+	default:
+		logger.Errorf("Invalid proxy type: %s", msg.ProxyType)
+		failCh <- struct{}{}
+		return
+	}
+
+	if err != nil {
+		failCh <- struct{}{}
+	}
+}
+
+func (s *Server) handleUDPProxy(uPort int, domain string, cConn net.Conn, msg *proto.MsgProxyReq) error {
+	from := cConn.RemoteAddr().String()
+
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.ParseIP("0.0.0.0"),
+		Port: uPort,
+	})
+	if err != nil {
+		logger.Errorf("Error listening: %v, port: %d, type: %s", err, uPort, msg.ProxyType)
+		return fmt.Errorf("error listening: %v", err)
+	}
+	// defer udpConn.Close() // don't close
+
+	logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
+
+	if s.cfg.DomainTunnel {
+		domain, err = s.distrDomain(msg.Subdomain)
 		if err != nil {
-			logger.Errorf("Error listening: %v, port: %d, type: %s", err, uPort, msg.ProxyType)
-			failChan <- struct{}{}
-			return
+			logger.Errorf("Invalid subdomain: %s, err: %v", msg.Subdomain, err)
+			return fmt.Errorf("invalid subdomain: %s", msg.Subdomain)
 		}
-		defer uListener.Close()
+	}
 
-		logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
-		s.addProxy(Proxy{
-			To:           uPort,
-			From:         from,
-			Subdomain:    msg.Subdomain,
-			listenCloser: uListener,
-		})
+	s.flushProxy(Proxy{
+		To:      uPort,
+		From:    from,
+		Domain:  domain,
+		uCloser: udpConn,
+	})
 
-		logger.Infof("Receive proxy from %s to port %d", from, uPort)
-		logger.Infof("Send proxy accept msg to client: %s", from)
+	logger.Infof("Receive proxy from %s to port %d", from, uPort)
+	logger.Infof("Send proxy accept msg to client: %s", from)
 
-		domain := fmt.Sprintf("%s.%s", msg.Subdomain, s.cfg.Domain)
-		if !s.cfg.DomainTunnel {
-			domain = ""
+	if err = proto.Send(cConn, proto.NewMsgProxyResp(domain, "success")); err != nil {
+		logger.Errorf("Error sending proxy accept message: %v", err)
+		return fmt.Errorf("error sending proxy accept message: %v", err)
+	}
+
+	go tickHeart(cConn, logger.New(fmt.Sprintf("[:%d]", uPort)))
+
+	uid := conn.NewUuid()
+	s.udpConnMap.Add(uid, udpConn)
+	if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
+		logger.Errorf("Error sending exchange message: %v", err)
+	}
+
+	logger.Debugf("Send udp listener to client, id: %s", uid)
+	return nil
+}
+
+func (s *Server) handleTCPProxy(uPort int, domain string, cConn net.Conn, msg *proto.MsgProxyReq) error {
+	from := cConn.RemoteAddr().String()
+
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", uPort))
+	if err != nil {
+		logger.Errorf("Error listening: %v, port: %d, type: %s", err, uPort, msg.ProxyType)
+		return fmt.Errorf("error listening: %v", err)
+	}
+	defer listener.Close()
+
+	logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
+
+	if s.cfg.DomainTunnel {
+		domain, err = s.distrDomain(msg.Subdomain)
+		if err != nil {
+			logger.Errorf("Invalid subdomain: %s, err: %v", msg.Subdomain, err)
+			return fmt.Errorf("invalid subdomain: %s", msg.Subdomain)
 		}
+	}
 
-		if err = proto.Send(cConn, proto.NewMsgProxyResp(domain, "success")); err != nil {
-			logger.Errorf("Error sending proxy accept message: %v", err)
-			failChan <- struct{}{}
-			return
+	s.flushProxy(Proxy{
+		To:      uPort,
+		From:    from,
+		Domain:  domain,
+		uCloser: listener,
+	})
+
+	logger.Infof("Receive proxy from %s to port %d", from, uPort)
+	logger.Infof("Send proxy accept msg to client: %s", from)
+
+	if err = proto.Send(cConn, proto.NewMsgProxyResp(domain, "success")); err != nil {
+		logger.Errorf("Error sending proxy accept message: %v", err)
+		return fmt.Errorf("error sending proxy accept message: %v", err)
+	}
+
+	go tickHeart(cConn, logger.New(fmt.Sprintf("[:%d]", uPort)))
+
+	for {
+		userConn, err := listener.Accept()
+		if err != nil {
+			return fmt.Errorf("error accepting: %v", err)
 		}
-
+		logger.Debugf("Receive new user conn: %s", userConn.RemoteAddr().String())
 		go func() {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-
-			for range ticker.C {
-				if err := proto.Send(cConn, proto.NewMsgHeartbeat()); err != nil {
-					logger.Warnf("Error sending heartbeat message: %v, proxy to port: %d", err, uPort)
-					return
-				}
+			uid := conn.NewUuid()
+			s.tcpConnMap.Add(uid, userConn)
+			if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
+				logger.Errorf("Error sending exchange message: %v", err)
 			}
+			logger.Debugf("Send new user conn id: %s", uid)
 		}()
+	}
+}
 
-		for {
-			userConn, err := uListener.Accept()
-			if err != nil {
-				return
-			}
-			logger.Debugf("Receive new user conn: %s", userConn.RemoteAddr().String())
-			go func() {
-				uid := conn.NewUuid()
-				s.tcpConnMap.Add(uid, userConn)
-				if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
-					logger.Errorf("Error sending exchange message: %v", err)
-				}
-				logger.Debugf("Send new user conn id: %s", uid)
-			}()
+func tickHeart(cConn net.Conn, hlogger *logger.Logger) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if err := proto.Send(cConn, proto.NewMsgHeartbeat()); err != nil {
+			hlogger.Warnf("Error sending heartbeat message: %v", err)
+			return
 		}
 	}
 }
@@ -371,7 +360,7 @@ func (s *Server) handleExchange(conn net.Conn, msg *proto.MsgExchange) {
 			return
 		}
 		defer s.udpConnMap.Del(msg.ConnId)
-		proxy.UDPDatagram(s.cfg.Token, conn, uConn)
+		proxy.UDPDatagram(conn, uConn)
 	case "tcp":
 		logger.Debugf("Receive tcp conn exchange msg from client: %s", msg.ConnId)
 		uConn, ok := s.tcpConnMap.Get(msg.ConnId)
@@ -384,49 +373,62 @@ func (s *Server) handleExchange(conn net.Conn, msg *proto.MsgExchange) {
 	}
 }
 
-func (s *Server) availablePort(port int) bool {
+func (s *Server) isVailablePort(port int) bool {
 	s.m.Lock()
 	defer s.m.Unlock()
 
 	return port > 0 && port < 65535 && !s.portManager[port]
 }
-
-type Proxy struct {
-	To           int
-	From         string
-	Subdomain    string
-	listenCloser io.Closer
-}
-
-func (s *Server) addProxy(f Proxy) {
+func (s *Server) distrDomain(sub string) (string, error) {
 	s.m.Lock()
 	defer s.m.Unlock()
 
-	if s.cfg.DomainTunnel {
-		if f.Subdomain == "" {
-			f.Subdomain = fmt.Sprintf("%s.%s", uuid.NewString()[:7], s.cfg.Domain)
-		} else {
-			f.Subdomain = fmt.Sprintf("%s.%s", f.Subdomain, s.cfg.Domain)
-		}
-		go addCaddyRouter(f.Subdomain, f.To)
+	if !s.cfg.DomainTunnel {
+		return "", nil
 	}
+
+	if sub == "" {
+		sub = uuid.NewString()[:10]
+	}
+
+	domain := fmt.Sprintf("%s.%s", sub, s.cfg.Domain)
+
+	if !s.domainManager[domain] {
+		return domain, nil
+	}
+
+	return domain, errors.New("domain already used")
+}
+
+type Proxy struct {
+	To      int
+	From    string
+	Domain  string
+	uCloser io.Closer
+}
+
+func (s *Server) flushProxy(f Proxy) {
+	s.m.Lock()
+	defer s.m.Unlock()
 
 	s.proxys = append(s.proxys, f)
 	s.portManager[f.To] = true
+	s.domainManager[f.Domain] = true
 }
 
-func (s *Server) delProxy(to int) {
+func (s *Server) removeProxy(to int) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	for i, ff := range s.proxys {
 		if ff.To == to {
-			ff.listenCloser.Close()
+			ff.uCloser.Close()
 			if s.cfg.DomainTunnel {
-				go delCaddyRouter(fmt.Sprintf("%s.%d", ff.Subdomain, ff.To))
+				delCaddyRouter(fmt.Sprintf("%s.%d", ff.Domain, ff.To))
 			}
 			s.proxys = append(s.proxys[:i], s.proxys[i+1:]...)
 			logger.Infof("Receive cancel proxy from %s to port %d", ff.From, ff.To)
 			s.portManager[ff.To] = false
+			s.domainManager[ff.Domain] = false
 			return
 		}
 	}

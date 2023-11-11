@@ -8,13 +8,13 @@ import (
 )
 
 func main() {
-	udpServer, err := net.ListenPacket("udp", ":3000")
+	udpServer, err := net.ListenPacket("udp", ":10010")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer udpServer.Close()
 
-	fmt.Println("Server listening on port 3000")
+	fmt.Println("Server listening on port 10010")
 	for {
 		buf := make([]byte, 1024)
 		_, addr, err := udpServer.ReadFrom(buf)

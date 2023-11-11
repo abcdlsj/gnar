@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/abcdlsj/pipe/client/control.go"
+	"github.com/abcdlsj/pipe/client/control"
 	"github.com/abcdlsj/pipe/logger"
 	"github.com/abcdlsj/pipe/pio"
 	"github.com/abcdlsj/pipe/proto"

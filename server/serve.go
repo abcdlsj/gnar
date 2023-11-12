@@ -426,7 +426,6 @@ func (s *Server) removeProxy(to int) {
 				delCaddyRouter(fmt.Sprintf("%s.%d", ff.Domain, ff.To))
 			}
 			s.proxys = append(s.proxys[:i], s.proxys[i+1:]...)
-			logger.Infof("Receive cancel proxy from %s to port %d", ff.From, ff.To)
 			s.portManager[ff.To] = false
 			s.domainManager[ff.Domain] = false
 			return

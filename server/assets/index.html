@@ -1,32 +1,30 @@
 <!DOCTYPE html>
 <html>
-
-<head>
-    <title>pipe server admin</title>
+  <head>
+    <title>Pipe Admin</title>
     <link rel="stylesheet" type="text/css" href="/static/style.css" />
     <link rel="shortcut icon" href="/static/favicon.ico" />
-</head>
+  </head>
 
-<body>
+  <body>
     <h1>Active Proxys</h1>
     <table>
-        <thead>
-            <tr>
-                <th>From</th>
-                <th>Domain</th>
-                <th>To</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range .proxys}}
-            <tr>
-                <td>{{.From}}</td>
-                <td>{{.Domain}}</td>
-                <td>:{{.To}}</td>
-            </tr>
-            {{end}}
-        </tbody>
+      <thead>
+        <tr>
+          <th>From</th>
+          <th>Domain</th>
+          <th>To</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .proxys}}
+        <tr>
+          <td>{{.From}}</td>
+          <td>{{.Domain}}</td>
+          <td>:{{.To}}</td>
+        </tr>
+        {{end}}
+      </tbody>
     </table>
-</body>
-
+  </body>
 </html>

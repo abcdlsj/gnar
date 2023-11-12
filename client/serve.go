@@ -147,7 +147,7 @@ func (f *Proxyer) Run() {
 }
 
 func (f *Proxyer) handleExchange(msg *proto.MsgExchange, nlogger *logger.Logger) {
-	nlogger.Infof("Receive udp conn from server, start proxying, conn_id: %s", msg.ConnId)
+	nlogger.Infof("Receive user conn from server, start proxying, conn_id: %s", msg.ConnId)
 	rConn, err := f.ctrlDialer.Open()
 	if err != nil {
 		nlogger.Errorf("Error connecting to remote: %v", err)

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/md5"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +74,7 @@ func (s *Server) Run() {
 			go func() {
 				session, err := s.newMuxSession(conn)
 				if session == nil {
+					conn.Close()
 					return
 				}
 				if err != nil {
@@ -100,7 +100,7 @@ func (s *Server) Run() {
 }
 
 func (s *Server) newMuxSession(conn net.Conn) (*yamux.Session, error) {
-	if err := checkConn(s.cfg.Token, conn); err != nil {
+	if err := s.authCheckConn(conn, s.cfg.Token); err != nil {
 		return nil, err
 	}
 
@@ -116,7 +116,8 @@ func (s *Server) newMuxSession(conn net.Conn) (*yamux.Session, error) {
 
 func (s *Server) handle(conn net.Conn, mux bool) {
 	if !mux {
-		if err := checkConn(s.cfg.Token, conn); err != nil {
+		if err := s.authCheckConn(conn, s.cfg.Token); err != nil {
+			conn.Close()
 			return
 		}
 	}
@@ -166,17 +167,14 @@ func (s *Server) handle(conn net.Conn, mux bool) {
 	}
 }
 
-func checkConn(token string, conn net.Conn) error {
+func (s *Server) authCheckConn(conn net.Conn, token string) error {
 	loginMsg := proto.MsgLogin{}
 	if err := proto.Recv(conn, &loginMsg); err != nil {
 		logger.Errorf("Error reading from connection: %v", err)
 		return err
 	}
 
-	hash := md5.New()
-	hash.Write([]byte(token + fmt.Sprintf("%d", loginMsg.Timestamp)))
-
-	if fmt.Sprintf("%x", hash.Sum(nil)) != loginMsg.Token {
+	if ok := s.authenticator.VerifyLogin(&loginMsg); !ok {
 		logger.Errorf("Invalid token, client addr: %s", conn.RemoteAddr().String())
 		return fmt.Errorf("invalid token")
 	}

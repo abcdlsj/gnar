@@ -21,8 +21,8 @@ func NewTokenAuthenticator(token string) Authenticator {
 
 func (t *TokenAuthenticator) VerifyLogin(msg *proto.MsgLogin) bool {
 	hash := md5.New()
-	hash.Write([]byte(msg.Token + fmt.Sprintf("%d", msg.Timestamp)))
-	return fmt.Sprintf("%x", hash.Sum(nil)) != t.token
+	hash.Write([]byte(t.token + fmt.Sprintf("%d", msg.Timestamp)))
+	return fmt.Sprintf("%x", hash.Sum(nil)) == msg.Token
 }
 
 type Nop struct{}

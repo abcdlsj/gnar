@@ -20,7 +20,7 @@ type LimitWriter struct {
 	limiter *rate.Limiter
 }
 
-type LimitStream struct {
+type LimitReadWriter struct {
 	rw       io.ReadWriteCloser
 	ctx      context.Context
 	wlimiter *rate.Limiter
@@ -43,8 +43,8 @@ func NewLimitWriter(w io.Writer, limit int) *LimitWriter {
 	}
 }
 
-func NewLimitStream(rw io.ReadWriteCloser, limit int) *LimitStream {
-	return &LimitStream{
+func NewLimitReadWriter(rw io.ReadWriteCloser, limit int) *LimitReadWriter {
+	return &LimitReadWriter{
 		rw:       rw,
 		ctx:      context.Background(),
 		wlimiter: rate.NewLimiter(rate.Limit(limit), limit), // set burst = limit
@@ -52,37 +52,12 @@ func NewLimitStream(rw io.ReadWriteCloser, limit int) *LimitStream {
 	}
 }
 
-func LimitTransfer(limit string) int {
-	inf := 1024 * 1024 * 1024 // just like no limit
-
-	// support b/kb/mb/gb
-	if limit[len(limit)-1] != 'b' {
-		return inf
-	}
-
-	base, err := strconv.Atoi(limit[:len(limit)-2])
-	if err != nil {
-		return inf
-	}
-
-	switch string(limit[len(limit)-2]) {
-	case "k":
-		return base * 1024
-	case "m":
-		return base * 1024 * 1024
-	case "g":
-		return base * 1024 * 1024 * 1024
-	}
-
-	return inf
-}
-
-func (s *LimitStream) Read(p []byte) (int, error) {
+func (s *LimitReadWriter) Read(p []byte) (int, error) {
 	if s.rlimiter == nil {
 		return s.rw.Read(p)
 	}
 
-	do := func(r *LimitStream, p []byte) (int, error) {
+	do := func(r *LimitReadWriter, p []byte) (int, error) {
 		n, err := r.rw.Read(p)
 		if err != nil {
 			return n, err
@@ -115,12 +90,12 @@ func (s *LimitStream) Read(p []byte) (int, error) {
 	return read, nil
 }
 
-func (s *LimitStream) Write(p []byte) (int, error) {
+func (s *LimitReadWriter) Write(p []byte) (int, error) {
 	if s.wlimiter == nil {
 		return s.rw.Write(p)
 	}
 
-	do := func(s *LimitStream, p []byte) (int, error) {
+	do := func(s *LimitReadWriter, p []byte) (int, error) {
 		n, err := s.rw.Write(p)
 		if err != nil {
 			return n, err
@@ -156,7 +131,7 @@ func (s *LimitStream) Write(p []byte) (int, error) {
 	return write, nil
 }
 
-func (s *LimitStream) Close() error {
+func (s *LimitReadWriter) Close() error {
 	return s.rw.Close()
 }
 
@@ -237,4 +212,29 @@ func (w *LimitWriter) Write(p []byte) (int, error) {
 	}
 
 	return write, nil
+}
+
+func LimitTransfer(limit string) int {
+	inf := 1024 * 1024 * 1024 // just like no limit
+
+	// support b/kb/mb/gb
+	if limit[len(limit)-1] != 'b' {
+		return inf
+	}
+
+	base, err := strconv.Atoi(limit[:len(limit)-2])
+	if err != nil {
+		return inf
+	}
+
+	switch string(limit[len(limit)-2]) {
+	case "k":
+		return base * 1024
+	case "m":
+		return base * 1024 * 1024
+	case "g":
+		return base * 1024 * 1024 * 1024
+	default: // number
+		return base*10 + int(limit[len(limit)-2]-'0')
+	}
 }

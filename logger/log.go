@@ -36,6 +36,24 @@ func (l Level) String() string {
 	return cr.PLBlack("???")
 }
 
+func fromLevel(s string) Level {
+	s = strings.ToLower(s)
+	switch s {
+	case "debug":
+		return DEBUG
+	case "info":
+		return INFO
+	case "warn":
+		return WARN
+	case "error":
+		return ERROR
+	case "fatal":
+		return FATAL
+	default:
+		return INFO
+	}
+}
+
 type Logger struct {
 	prefixs []string
 	logger  *log.Logger
@@ -59,14 +77,14 @@ func (l *Logger) CloneAdd(prefix string) *Logger {
 	}
 }
 
-var dflat *Logger
+var defatLogger *Logger
 
 func init() {
-	if os.Getenv("DEBUG") != "" {
-		SetLevel(DEBUG)
+	if val := os.Getenv("LOG_LEVEL"); val != "" {
+		SetLevel(fromLevel(val))
 	}
 
-	dflat = New()
+	defatLogger = New()
 }
 
 var gLevel = INFO
@@ -99,7 +117,7 @@ func header(prefixs []string, level Level) string {
 	return fmt.Sprintf("%s %s", level, apply(prefixs...))
 }
 
-func builderf(logger *log.Logger, prefixs []string, level Level, format string, v ...interface{}) {
+func buildF(logger *log.Logger, prefixs []string, level Level, format string, v ...interface{}) {
 	if level == FATAL {
 		logger.Fatalf(header(prefixs, level)+format, v...)
 	}
@@ -108,7 +126,7 @@ func builderf(logger *log.Logger, prefixs []string, level Level, format string, 
 	}
 }
 
-func builder(logger *log.Logger, prefixs []string, level Level, v ...interface{}) {
+func build(logger *log.Logger, prefixs []string, level Level, v ...interface{}) {
 	if level == FATAL {
 		logger.Fatalf(header(prefixs, level) + fmt.Sprintln(v...))
 	}
@@ -118,81 +136,81 @@ func builder(logger *log.Logger, prefixs []string, level Level, v ...interface{}
 }
 
 func (l *Logger) Debugf(format string, v ...interface{}) {
-	builderf(l.logger, l.prefixs, DEBUG, format, v...)
+	buildF(l.logger, l.prefixs, DEBUG, format, v...)
 }
 
 func (l *Logger) Infof(format string, v ...interface{}) {
-	builderf(l.logger, l.prefixs, INFO, format, v...)
+	buildF(l.logger, l.prefixs, INFO, format, v...)
 }
 
 func (l *Logger) Warnf(format string, v ...interface{}) {
-	builderf(l.logger, l.prefixs, WARN, format, v...)
+	buildF(l.logger, l.prefixs, WARN, format, v...)
 }
 
 func (l *Logger) Errorf(format string, v ...interface{}) {
-	builderf(l.logger, l.prefixs, ERROR, format, v...)
+	buildF(l.logger, l.prefixs, ERROR, format, v...)
 }
 
 func (l *Logger) Fatalf(format string, v ...interface{}) {
-	builderf(l.logger, l.prefixs, FATAL, format, v...)
+	buildF(l.logger, l.prefixs, FATAL, format, v...)
 }
 
 func (l *Logger) Debug(v ...interface{}) {
-	builder(l.logger, l.prefixs, DEBUG, v...)
+	build(l.logger, l.prefixs, DEBUG, v...)
 }
 
 func (l *Logger) Info(v ...interface{}) {
-	builder(l.logger, l.prefixs, INFO, v...)
+	build(l.logger, l.prefixs, INFO, v...)
 }
 
 func (l *Logger) Warn(v ...interface{}) {
-	builder(l.logger, l.prefixs, WARN, v...)
+	build(l.logger, l.prefixs, WARN, v...)
 }
 
 func (l *Logger) Error(v ...interface{}) {
-	builder(l.logger, l.prefixs, ERROR, v...)
+	build(l.logger, l.prefixs, ERROR, v...)
 }
 
 func (l *Logger) Fatal(v ...interface{}) {
-	builder(l.logger, l.prefixs, FATAL, v...)
+	build(l.logger, l.prefixs, FATAL, v...)
 }
 
 func Debugf(format string, v ...interface{}) {
-	dflat.Debugf(format, v...)
+	defatLogger.Debugf(format, v...)
 }
 
 func Infof(format string, v ...interface{}) {
-	dflat.Infof(format, v...)
+	defatLogger.Infof(format, v...)
 }
 
 func Warnf(format string, v ...interface{}) {
-	dflat.Warnf(format, v...)
+	defatLogger.Warnf(format, v...)
 }
 
 func Errorf(format string, v ...interface{}) {
-	dflat.Errorf(format, v...)
+	defatLogger.Errorf(format, v...)
 }
 
 func Debug(v ...interface{}) {
-	dflat.Debug(v...)
+	defatLogger.Debug(v...)
 }
 
 func Info(v ...interface{}) {
-	dflat.Info(v...)
+	defatLogger.Info(v...)
 }
 
 func Warn(v ...interface{}) {
-	dflat.Warn(v...)
+	defatLogger.Warn(v...)
 }
 
 func Error(v ...interface{}) {
-	dflat.Error(v...)
+	defatLogger.Error(v...)
 }
 
 func Fatalf(format string, v ...interface{}) {
-	dflat.Fatalf(format, v...)
+	defatLogger.Fatalf(format, v...)
 }
 
 func Fatal(v ...interface{}) {
-	dflat.Fatal(v...)
+	defatLogger.Fatal(v...)
 }

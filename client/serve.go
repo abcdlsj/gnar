@@ -107,6 +107,12 @@ func (c *Client) Run() {
 }
 
 func (f *Proxyer) Run() {
+	defer func() {
+		if r := recover(); r != nil {
+			f.logger.Fatalf("Proxy panic: %v", r)
+		}
+	}()
+
 	rConn, err := f.ctrlDialer.Open()
 	if err != nil {
 		f.logger.Fatalf("Error open svr connection to remote: %v", err)
@@ -163,7 +169,6 @@ func (f *Proxyer) handleExchange(msg *proto.MsgExchange, nlogger *logger.Logger)
 }
 
 func (f *Proxyer) mustNewProxy(rConn net.Conn) {
-
 	if err := proto.Send(rConn, proto.NewMsgProxy(f.proxyName, f.subdomain,
 		f.proxyType, f.remotePort)); err != nil {
 		f.logger.Fatalf("Error send proxy msg to remote: %v", err)
@@ -175,12 +180,12 @@ func (f *Proxyer) mustNewProxy(rConn net.Conn) {
 	}
 
 	if pxyResp.Status != "success" {
-		f.logger.Fatalf("Proxy failed, status: %s, remote port: %d", pxyResp.Status, f.remotePort)
+		f.logger.Fatalf("Proxy create failed, status: %s, remote port: %d", pxyResp.Status, f.remotePort)
 	}
 
 	if pxyResp.Domain != "" {
-		f.logger.Infof("Proxy success, remote port: %d, domain: %s", f.remotePort, pxyResp.Domain)
+		f.logger.Infof("Proxy create success, domain: %s", pxyResp.Domain)
 	} else {
-		f.logger.Infof("Proxy success, remote port: %d", f.remotePort)
+		f.logger.Info("Proxy create success!")
 	}
 }

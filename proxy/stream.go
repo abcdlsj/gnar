@@ -5,6 +5,9 @@ import (
 )
 
 func Stream(s1, s2 io.ReadWriteCloser) {
+	s1 = rwcWrap(s1)
+	s2 = rwcWrap(s2)
+
 	defer s1.Close()
 	defer s2.Close()
 
@@ -25,4 +28,13 @@ func Stream(s1, s2 io.ReadWriteCloser) {
 	}()
 
 	copy(s2, s1)
+}
+
+// rwcWrap Remove io.ReaderFrom and io.WriterTo from io.ReadWriteCloser (https://github.com/golang/go/issues/16474)
+func rwcWrap(rwc io.ReadWriteCloser) io.ReadWriteCloser {
+	return struct {
+		io.ReadWriteCloser
+	}{
+		rwc,
+	}
 }

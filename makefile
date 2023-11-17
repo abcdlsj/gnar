@@ -1,11 +1,20 @@
-all:
+.DEFAULT_GOAL := help
+
+help:
+	@echo "Usage: make [target]"
+
+build:
 	go build -ldflags "-X github.com/abcdlsj/pipe/share.BuildStamp=`date +'%Y-%m-%d_%H:%M.%S'` -X github.com/abcdlsj/pipe/share.GitHash=`git rev-parse --short HEAD`"
+
+install: build
+	rm ${GOPATH}/bin/pipe 2> /dev/null || true
+	mv pipe ${GOPATH}bin/
 
 clean:
 	rm -f ./pipe
 
 prebuild_startpy:
-	make all
+	make build
 	killall pipe || true
 	killall Python || true
 	killall python3 || true

@@ -6,12 +6,6 @@ import (
 
 func Command() *cobra.Command {
 	var (
-		lport     int
-		fport     int
-		subdomain string
-		proxyName string
-		proxyType string
-
 		cfgFile string
 		flagCfg Config
 	)
@@ -22,14 +16,6 @@ func Command() *cobra.Command {
 			if cfgFile != "" {
 				newClient(parseConfig(cfgFile)).Run()
 			} else {
-				flagCfg.Proxys[0] = Proxy{
-					LocalPort:  lport,
-					RemotePort: fport,
-					Subdomain:  subdomain,
-					ProxyName:  proxyName,
-					ProxyType:  proxyType,
-				}
-
 				newClient(flagCfg).Run()
 			}
 		},
@@ -38,14 +24,17 @@ func Command() *cobra.Command {
 	flagCfg.Proxys = make([]Proxy, 1)
 
 	cfg.PersistentFlags().StringVarP(&flagCfg.SvrAddr, "server-addr", "s", "localhost:8910", "server addr")
-	cfg.PersistentFlags().IntVarP(&fport, "proxy-port", "u", 0, "proxy port")
-	cfg.PersistentFlags().IntVarP(&lport, "local-port", "l", 0, "local port")
-	cfg.PersistentFlags().StringVarP(&flagCfg.Token, "token", "t", "", "token")
-	cfg.PersistentFlags().StringVarP(&subdomain, "subdomain", "d", "", "subdomain")
-	cfg.PersistentFlags().StringVarP(&proxyName, "proxy-name", "n", "", "proxy name")
-	cfg.PersistentFlags().StringVarP(&proxyType, "proxy-type", "y", "tcp", "proxy transport protocol type")
-	cfg.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 	cfg.PersistentFlags().BoolVarP(&flagCfg.Multiplex, "multiplex", "m", false, "multiplex client/server control connection")
+	cfg.PersistentFlags().StringVarP(&flagCfg.Token, "token", "t", "", "token")
+
+	cfg.PersistentFlags().IntVarP(&flagCfg.Proxys[0].RemotePort, "remote-port", "u", 0, "proxy port")
+	cfg.PersistentFlags().IntVarP(&flagCfg.Proxys[0].LocalPort, "local-port", "l", 0, "local port")
+	cfg.PersistentFlags().StringVarP(&flagCfg.Proxys[0].Subdomain, "subdomain", "d", "", "subdomain")
+	cfg.PersistentFlags().StringVarP(&flagCfg.Proxys[0].ProxyName, "proxy-name", "n", "", "proxy name")
+	cfg.PersistentFlags().StringVarP(&flagCfg.Proxys[0].ProxyType, "proxy-type", "y", "tcp", "proxy transport protocol type")
+	cfg.PersistentFlags().StringVarP(&flagCfg.Proxys[0].SpeedLimit, "speed-limit", "", "", "speed limit")
+
+	cfg.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
 
 	return cfg
 }

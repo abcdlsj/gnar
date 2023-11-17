@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"io"
 	"net"
 
 	"github.com/abcdlsj/pipe/logger"
@@ -9,11 +10,11 @@ import (
 
 type UDP struct {
 	lport  int
-	rconn  net.Conn
+	rconn  io.ReadWriteCloser
 	logger *logger.Logger
 }
 
-func NewUDP(lport int, rconn net.Conn, tlogger *logger.Logger) *UDP {
+func NewUDP(lport int, rconn io.ReadWriteCloser, tlogger *logger.Logger) *UDP {
 	return &UDP{
 		lport:  lport,
 		rconn:  rconn,

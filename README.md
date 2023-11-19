@@ -1,19 +1,20 @@
 <!-- TOC start (generated with https://github.com/derlin/bitdowntoc) -->
 
-- [Pipe](#pipe)
+- [Gnar](#gnar)
   - [Install](#install)
   - [Usage](#usage)
   - [Client](#client)
   - [Server](#server)
-- [start a service](#start-a-service)
-- [start proxy](#start-proxy)
+    - [Server admin panel](#server-admin-panel)
+  - [Simple Start](#simple-start)
+  - [Deploy at `fly.io`](#deploy-at-flyio)
   - [Subdomain proxy](#subdomain-proxy)
   - [Trubleshooting](#trubleshooting)
 
 <!-- TOC end -->
 
-<!-- TOC --><a name="pipe"></a>
-# Pipe
+<!-- TOC --><a name="gnar"></a>
+# Gnar
 
 [![asciicast](https://asciinema.org/a/606328.svg)](https://asciinema.org/a/606328)
 **Do not destroy the server!!!**
@@ -45,7 +46,7 @@ Future Plans:
 ## Install
 
 ```
-git clone https://github.com/abcdlsj/pipe
+git clone https://github.com/abcdlsj/gnar
 make
 ```
 
@@ -53,11 +54,11 @@ make
 ## Usage
 
 ```
-pipe is a proxy tool.
+gnar is a proxy tool.
 
 Usage:
-  pipe [flags]
-  pipe [command]
+  gnar [flags]
+  gnar [command]
 
 Available Commands:
   client      
@@ -66,17 +67,17 @@ Available Commands:
   server      
 
 Flags:
-  -h, --help      help for pipe
-  -v, --version   version for pipe
+  -h, --help      help for gnar
+  -v, --version   version for gnar
 
-Use "pipe [command] --help" for more information about a command.
+Use "gnar [command] --help" for more information about a command.
 ```
 
 <!-- TOC --><a name="client"></a>
 ## Client
 ```
 Usage:
-  pipe client [flags]
+  gnar client [flags]
 
 Flags:
   -c, --config string        config file
@@ -84,17 +85,19 @@ Flags:
   -l, --local-port int       local port
   -m, --multiplex            multiplex client/server control connection
   -n, --proxy-name string    proxy name
-  -u, --proxy-port int       proxy port
   -y, --proxy-type string    proxy transport protocol type (default "tcp")
+  -u, --remote-port int      proxy port
   -s, --server-addr string   server addr (default "localhost:8910")
+      --speed-limit string   speed limit
   -d, --subdomain string     subdomain
   -t, --token string         token
 ```
 
 <!-- TOC --><a name="server"></a>
 ## Server 
+```
 Usage:
-  pipe server [flags]
+  gnar server [flags]
 
 Flags:
   -a, --admin-port int   admin server port
@@ -117,7 +120,7 @@ Flags:
 
 Server
 ```
-pipe server -p 8910
+gnar server -p 8910
 ```
 
 Client
@@ -125,7 +128,7 @@ Client
 # start a service
 python3 -m http.server 3000
 # start proxy
-pipe client -s localhost:8910 -l 3000 -u 9001
+gnar client -s localhost:8910 -l 3000 -u 9001
 ```
 
 view `host:9001` and you will see the service.
@@ -187,25 +190,27 @@ A example.com <your server ip> (`@` is ok too)
 
 2. start caddy server
 ```
-[sudo] caddy run --config <pipe path>/server/caddy.json
+[sudo] caddy run --config <gnar path>/server/caddy.json
 ```
 
-3. start pipe server with `domain-tunnel` flag
+3. start `Gnar server` server with `domain-tunnel` flag
 ```
-./pipe server -a 8911 -D <example.com> -d -p 8910
+gnar server -a 8911 -D <example.com> -d -p 8910
 ``` 
 
-4. start pipe client
+4. start `Gnar client`
 ```
-./pipe client -s localhost:8910 -l 3000 -u 9001
+gnar client -s localhost:8910 -l 3000 -u 9001
+```
+> You also can custom the subdomain
+> ```gnar client -s localhost:8910 -l 3000 -u 9001 -d <subdomain>```
+
+1. now you can find the subdomain in logs, like this
+```
+2023/07/02 09:50:16 INF Tunnel created successfully, id: 3ec8f1b-9001, host: 3ec8f1b.xxx.xxx
 ```
 
-5. now you can find the subdomain in server log, like this
-```
-2023/07/02 09:50:16 [INFO] Tunnel created successfully, id: 3ec8f1b-9001, host: 3ec8f1b.xxx.xxx
-```
-
-6. visit `3ec8f1b.xxx.xxx` and you will see the service.
+1. visit `3ec8f1b.xxx.xxx` and you will see the service.
 
 
 <!-- TOC --><a name="trubleshooting"></a>

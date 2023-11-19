@@ -4,7 +4,7 @@ import (
 	"crypto/md5"
 	"fmt"
 
-	"github.com/abcdlsj/pipe/proto"
+	"github.com/abcdlsj/gnar/proto"
 )
 
 type Authenticator interface {

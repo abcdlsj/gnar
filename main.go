@@ -1,6 +1,6 @@
 package main
 
-import "github.com/abcdlsj/pipe/cmd"
+import "github.com/abcdlsj/gnar/cmd"
 
 func main() {
 	cmd.Execute()

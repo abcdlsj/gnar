@@ -6,12 +6,12 @@ import (
 	"net/http"
 
 	"github.com/abcdlsj/cr"
-	"github.com/abcdlsj/pipe/logger"
+	"github.com/abcdlsj/gnar/logger"
 )
 
 var (
 	caddyAddRouteF         = "{\"@id\":\"%s\",\"match\":[{\"host\":[\"%s\"]}],\"handle\":[{\"handler\":\"reverse_proxy\",\"upstreams\":[{\"dial\":\":%d\"}]}]}"
-	caddyAddRouteUrl       = "http://127.0.0.1:2019/config/apps/http/servers/pipe/routes"
+	caddyAddRouteUrl       = "http://127.0.0.1:2019/config/apps/http/servers/gnar/routes"
 	caddyAddTlsSubjectsUrl = "http://127.0.0.1:2019/config/apps/tls/automation/policies/0/subjects"
 )
 

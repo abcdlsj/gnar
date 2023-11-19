@@ -1,4 +1,4 @@
-module github.com/abcdlsj/pipe
+module github.com/abcdlsj/gnar
 
 go 1.20
 

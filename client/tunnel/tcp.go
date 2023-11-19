@@ -5,8 +5,8 @@ import (
 	"io"
 	"net"
 
-	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/proxy"
+	"github.com/abcdlsj/gnar/logger"
+	"github.com/abcdlsj/gnar/proxy"
 )
 
 type TCP struct {

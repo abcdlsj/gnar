@@ -3,6 +3,6 @@
 **/*.patch
 
 # binary
-**/pipe
+**/gnar
 
 fly.toml

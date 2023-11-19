@@ -8,7 +8,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/abcdlsj/pipe/share"
+	"github.com/abcdlsj/gnar/share"
 )
 
 type Msg interface {

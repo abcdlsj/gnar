@@ -3,7 +3,7 @@ package control
 import (
 	"net"
 
-	"github.com/abcdlsj/pipe/proto"
+	"github.com/abcdlsj/gnar/proto"
 	"github.com/hashicorp/yamux"
 )
 

@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/abcdlsj/pipe/auth"
-	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/proto"
-	"github.com/abcdlsj/pipe/proxy"
-	"github.com/abcdlsj/pipe/server/conn"
-	"github.com/abcdlsj/pipe/share"
+	"github.com/abcdlsj/gnar/auth"
+	"github.com/abcdlsj/gnar/logger"
+	"github.com/abcdlsj/gnar/proto"
+	"github.com/abcdlsj/gnar/proxy"
+	"github.com/abcdlsj/gnar/server/conn"
+	"github.com/abcdlsj/gnar/share"
 	"github.com/google/uuid"
 	"github.com/hashicorp/yamux"
 )

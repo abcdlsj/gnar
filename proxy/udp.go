@@ -5,8 +5,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/proto"
+	"github.com/abcdlsj/gnar/logger"
+	"github.com/abcdlsj/gnar/proto"
 )
 
 func UDPClientDatagram(tcp, udp io.ReadWriteCloser) error {

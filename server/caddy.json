@@ -2,7 +2,7 @@
     "apps": {
         "http": {
             "servers": {
-                "pipe": {
+                "gnar": {
                     "listen": [
                         ":443"
                     ],

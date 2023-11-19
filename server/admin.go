@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/abcdlsj/pipe/logger"
+	"github.com/abcdlsj/gnar/logger"
 )
 
 var (

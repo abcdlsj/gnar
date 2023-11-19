@@ -12,7 +12,7 @@ func TestEncrypt(t *testing.T) {
 
 	str := `Genshin Start!`
 
-	tmpF, _ := os.CreateTemp("", "pipe_testencrypt_")
+	tmpF, _ := os.CreateTemp("", "gnar_testencrypt_")
 	w, err := EncryptWriter(tmpF)
 	if err != nil {
 		t.Fatal(err)

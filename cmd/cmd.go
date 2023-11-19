@@ -3,16 +3,16 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/abcdlsj/pipe/client"
-	"github.com/abcdlsj/pipe/server"
-	"github.com/abcdlsj/pipe/share"
+	"github.com/abcdlsj/gnar/client"
+	"github.com/abcdlsj/gnar/server"
+	"github.com/abcdlsj/gnar/share"
 	"github.com/spf13/cobra"
 )
 
 func Execute() {
 	var RootCmd = &cobra.Command{
-		Use:  "pipe",
-		Long: "pipe is a proxy tool.",
+		Use:  "gnar",
+		Long: "gnar is a proxy tool.",
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
 		},

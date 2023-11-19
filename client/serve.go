@@ -10,10 +10,10 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/abcdlsj/pipe/client/control"
-	"github.com/abcdlsj/pipe/client/tunnel"
-	"github.com/abcdlsj/pipe/logger"
-	"github.com/abcdlsj/pipe/proto"
+	"github.com/abcdlsj/gnar/client/control"
+	"github.com/abcdlsj/gnar/client/tunnel"
+	"github.com/abcdlsj/gnar/logger"
+	"github.com/abcdlsj/gnar/proto"
 )
 
 type Client struct {

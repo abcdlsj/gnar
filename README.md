@@ -193,12 +193,12 @@ A example.com <your server ip> (`@` is ok too)
 [sudo] caddy run --config <gnar path>/server/caddy.json
 ```
 
-3. start `Gnar server` server with `domain-tunnel` flag
+1. start `server` server with `domain-tunnel` flag
 ```
 gnar server -a 8911 -D <example.com> -d -p 8910
 ``` 
 
-4. start `Gnar client`
+1. start `client`
 ```
 gnar client -s localhost:8910 -l 3000 -u 9001
 ```

@@ -117,7 +117,7 @@ func header(prefixs []string, level Level) string {
 	return fmt.Sprintf("%s %s", level, apply(prefixs...))
 }
 
-func buildF(logger *log.Logger, prefixs []string, level Level, format string, v ...interface{}) {
+func buildF(logger *log.Logger, prefixs []string, level Level, format string, v ...any) {
 	if level == FATAL {
 		logger.Fatalf(header(prefixs, level)+format, v...)
 	}
@@ -126,7 +126,7 @@ func buildF(logger *log.Logger, prefixs []string, level Level, format string, v 
 	}
 }
 
-func build(logger *log.Logger, prefixs []string, level Level, v ...interface{}) {
+func build(logger *log.Logger, prefixs []string, level Level, v ...any) {
 	if level == FATAL {
 		logger.Fatalf(header(prefixs, level) + fmt.Sprintln(v...))
 	}
@@ -135,82 +135,82 @@ func build(logger *log.Logger, prefixs []string, level Level, v ...interface{}) 
 	}
 }
 
-func (l *Logger) Debugf(format string, v ...interface{}) {
+func (l *Logger) Debugf(format string, v ...any) {
 	buildF(l.logger, l.prefixs, DEBUG, format, v...)
 }
 
-func (l *Logger) Infof(format string, v ...interface{}) {
+func (l *Logger) Infof(format string, v ...any) {
 	buildF(l.logger, l.prefixs, INFO, format, v...)
 }
 
-func (l *Logger) Warnf(format string, v ...interface{}) {
+func (l *Logger) Warnf(format string, v ...any) {
 	buildF(l.logger, l.prefixs, WARN, format, v...)
 }
 
-func (l *Logger) Errorf(format string, v ...interface{}) {
+func (l *Logger) Errorf(format string, v ...any) {
 	buildF(l.logger, l.prefixs, ERROR, format, v...)
 }
 
-func (l *Logger) Fatalf(format string, v ...interface{}) {
+func (l *Logger) Fatalf(format string, v ...any) {
 	buildF(l.logger, l.prefixs, FATAL, format, v...)
 }
 
-func (l *Logger) Debug(v ...interface{}) {
+func (l *Logger) Debug(v ...any) {
 	build(l.logger, l.prefixs, DEBUG, v...)
 }
 
-func (l *Logger) Info(v ...interface{}) {
+func (l *Logger) Info(v ...any) {
 	build(l.logger, l.prefixs, INFO, v...)
 }
 
-func (l *Logger) Warn(v ...interface{}) {
+func (l *Logger) Warn(v ...any) {
 	build(l.logger, l.prefixs, WARN, v...)
 }
 
-func (l *Logger) Error(v ...interface{}) {
+func (l *Logger) Error(v ...any) {
 	build(l.logger, l.prefixs, ERROR, v...)
 }
 
-func (l *Logger) Fatal(v ...interface{}) {
+func (l *Logger) Fatal(v ...any) {
 	build(l.logger, l.prefixs, FATAL, v...)
 }
 
-func Debugf(format string, v ...interface{}) {
+func Debugf(format string, v ...any) {
 	defatLogger.Debugf(format, v...)
 }
 
-func Infof(format string, v ...interface{}) {
+func Infof(format string, v ...any) {
 	defatLogger.Infof(format, v...)
 }
 
-func Warnf(format string, v ...interface{}) {
+func Warnf(format string, v ...any) {
 	defatLogger.Warnf(format, v...)
 }
 
-func Errorf(format string, v ...interface{}) {
+func Errorf(format string, v ...any) {
 	defatLogger.Errorf(format, v...)
 }
 
-func Debug(v ...interface{}) {
+func Debug(v ...any) {
 	defatLogger.Debug(v...)
 }
 
-func Info(v ...interface{}) {
+func Info(v ...any) {
 	defatLogger.Info(v...)
 }
 
-func Warn(v ...interface{}) {
+func Warn(v ...any) {
 	defatLogger.Warn(v...)
 }
 
-func Error(v ...interface{}) {
+func Error(v ...any) {
 	defatLogger.Error(v...)
 }
 
-func Fatalf(format string, v ...interface{}) {
+func Fatalf(format string, v ...any) {
 	defatLogger.Fatalf(format, v...)
 }
 
-func Fatal(v ...interface{}) {
+func Fatal(v ...any) {
 	defatLogger.Fatal(v...)
 }

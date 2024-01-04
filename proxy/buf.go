@@ -10,7 +10,7 @@ var bufPool = newBufPool(512) // TODO: benchmark this?
 
 func newBufPool(size int) *sync.Pool {
 	return &sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return &Buf{
 				buf: make([]byte, size),
 			}

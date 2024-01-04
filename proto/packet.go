@@ -39,7 +39,7 @@ func (p PacketType) String() string {
 	}
 }
 
-func packet(typ PacketType, msg interface{}) ([]byte, error) {
+func packet(typ PacketType, msg any) ([]byte, error) {
 	buf, err := json.Marshal(msg)
 	if err != nil {
 		return nil, err

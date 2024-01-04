@@ -25,7 +25,7 @@ func (s *Server) startAdmin() {
 	http.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.FS(fe))))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]interface{}{
+		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]any{
 			"proxys": s.proxys,
 		}); err != nil {
 			logger.Errorf("execute index.html error: %v", err)

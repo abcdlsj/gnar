@@ -16,7 +16,7 @@
 <!-- TOC --><a name="gnar"></a>
 # Gnar
 
-[![asciicast](https://asciinema.org/a/606328.svg)](https://asciinema.org/a/606328)
+![demo](./demo.gif)
 **Do not destroy the server!!!**
 
 frp-like Tool with AutoHTTPs Subdomain Proxy

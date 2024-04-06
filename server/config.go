@@ -1,31 +1,30 @@
 package server
 
 import (
-	"os"
-
-	"github.com/BurntSushi/toml"
 	"github.com/abcdlsj/gnar/logger"
+	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Port         int    `toml:"port"`
-	AdminPort    int    `toml:"admin-port"`    // zero means disable admin server
-	DomainTunnel bool   `toml:"domain-tunnel"` // enable domain tunnel
-	Domain       string `toml:"domain"`        // domain name
-	Token        string `toml:"token"`
-	Multiplex    bool   `toml:"multiplex"`
+	Port         int    `mapstructure:"port"`
+	AdminPort    int    `mapstructure:"admin-port"`
+	DomainTunnel bool   `mapstructure:"domain-tunnel"`
+	Domain       string `mapstructure:"domain"`
+	Token        string `mapstructure:"token"`
+	Multiplex    bool   `mapstructure:"multiplex"`
 }
 
-func parseConfig(cfgFile string) Config {
-	data, err := os.ReadFile(cfgFile)
+func LoadConfig(cfgFile string) (config Config, err error) {
+	viper.SetConfigFile(cfgFile)
+	viper.SetConfigType("toml")
+
+	viper.AutomaticEnv()
+
+	err = viper.ReadInConfig()
 	if err != nil {
 		logger.Fatalf("Error reading config file: %v", err)
 	}
 
-	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		logger.Fatalf("Error parsing config file: %v", err)
-	}
-
-	return cfg
+	err = viper.Unmarshal(&config)
+	return
 }

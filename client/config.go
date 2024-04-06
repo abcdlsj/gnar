@@ -1,42 +1,37 @@
 package client
 
 import (
-	"os"
-
-	"github.com/BurntSushi/toml"
 	"github.com/abcdlsj/gnar/logger"
+	"github.com/spf13/viper"
 )
 
 type Config struct {
-	SvrAddr   string  `toml:"server-addr"`
-	Token     string  `toml:"token"`
-	Multiplex bool    `toml:"multiplex"`
-	Proxys    []Proxy `toml:"proxys"`
+	SvrAddr   string  `mapstructure:"server-addr"`
+	Token     string  `mapstructure:"token"`
+	Multiplex bool    `mapstructure:"multiplex"`
+	Proxys    []Proxy `mapstructure:"proxys"`
 }
 
 type Proxy struct {
-	ProxyName  string `toml:"proxy-name"`
-	Subdomain  string `toml:"subdomain"`
-	RemotePort int    `toml:"remote-port"`
-	LocalPort  int    `toml:"local-port"`
-	SpeedLimit string `toml:"speed-limit"` // xx/s
-	ProxyType  string `toml:"proxy-type"`
+	ProxyName  string `mapstructure:"proxy-name"`
+	Subdomain  string `mapstructure:"subdomain"`
+	RemotePort int    `mapstructure:"remote-port"`
+	LocalPort  int    `mapstructure:"local-port"`
+	SpeedLimit string `mapstructure:"speed-limit"`
+	ProxyType  string `mapstructure:"proxy-type"`
 }
 
-type Transport struct {
-	Noise string `toml:"noise"`
-}
+func LoadConfig(cfgFile string) (config Config, err error) {
+	viper.SetConfigFile(cfgFile)
+	viper.SetConfigType("toml")
 
-func parseConfig(cfgFile string) Config {
-	data, err := os.ReadFile(cfgFile)
+	viper.AutomaticEnv()
+
+	err = viper.ReadInConfig()
 	if err != nil {
 		logger.Fatalf("Error reading config file: %v", err)
 	}
 
-	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		logger.Fatalf("Error parsing config file: %v", err)
-	}
-
-	return cfg
+	err = viper.Unmarshal(&config)
+	return
 }

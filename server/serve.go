@@ -126,7 +126,7 @@ func (s *Server) handleMuxSession(session *yamux.Session, conn net.Conn) {
 }
 
 func (s *Server) newMuxSession(conn net.Conn) (*yamux.Session, error) {
-	if err := s.authCheckConn(conn, s.cfg.Token); err != nil {
+	if err := s.authCheckConn(conn); err != nil {
 		return nil, err
 	}
 
@@ -142,58 +142,90 @@ func (s *Server) newMuxSession(conn net.Conn) (*yamux.Session, error) {
 
 func (s *Server) handle(conn net.Conn, mux bool) {
 	if !mux {
-		if err := s.authCheckConn(conn, s.cfg.Token); err != nil {
+		if err := s.authCheckConn(conn); err != nil {
+			logger.Errorf("Authentication failed: %v", err)
 			conn.Close()
 			return
 		}
 	}
 
-	pt, buf, err := proto.Read(conn)
-	if err != nil {
-		logger.Errorf("Error reading from connection: %v", err)
-		return
-	}
-
-	switch pt {
-	case proto.PacketProxyReq:
-		failCh := make(chan struct{})
-		defer close(failCh)
-
-		go func() {
-			<-failCh
-			if err := proto.Send(conn, proto.NewMsgProxyResp("", "failed")); err != nil {
-				logger.Errorf("Error sending proxy failed resp message: %v", err)
-			}
-		}()
-
-		msg := &proto.MsgProxyReq{}
-		if err := json.Unmarshal(buf, msg); err != nil {
-			logger.Errorf("Error unmarshalling message: %v", err)
+	for {
+		pt, buf, err := proto.Read(conn)
+		if err != nil {
+			logger.Errorf("Error reading packet: %v", err)
 			return
 		}
 
-		s.handleProxy(conn, msg, failCh)
-	case proto.PacketExchange:
-		msg := &proto.MsgExchange{}
-		if err := json.Unmarshal(buf, msg); err != nil {
-			logger.Errorf("Error unmarshalling message: %v", err)
+		if err := s.handlePacket(conn, pt, buf); err != nil {
+			logger.Errorf("Error handling packet: %v", err)
 			return
 		}
-
-		s.handleExchange(conn, msg)
-	case proto.PacketProxyCancel:
-		defer conn.Close()
-		msg := &proto.NewProxyCancel{}
-		if err := json.Unmarshal(buf, msg); err != nil {
-			logger.Errorf("Error unmarshalling message: %v", err)
-			return
-		}
-
-		s.handleCancel(msg)
 	}
 }
 
-func (s *Server) authCheckConn(conn net.Conn, token string) error {
+func (s *Server) handlePacket(conn net.Conn, pt proto.PacketType, buf []byte) error {
+	switch pt {
+	case proto.PacketProxyReq:
+		return s.handleProxyReq(conn, buf)
+	case proto.PacketExchange:
+		return s.handleExchange(conn, buf)
+	case proto.PacketProxyCancel:
+		return s.handleProxyCancel(conn, buf)
+	default:
+		return fmt.Errorf("unknown packet type: %v", pt)
+	}
+}
+
+func (s *Server) handleProxyReq(conn net.Conn, buf []byte) error {
+	msg := &proto.MsgProxyReq{}
+	if err := json.Unmarshal(buf, msg); err != nil {
+		return fmt.Errorf("error unmarshalling proxy request: %v", err)
+	}
+
+	failCh := make(chan struct{})
+	go s.sendFailureResponse(conn, failCh)
+
+	err := s.handleProxy(conn, msg, failCh)
+	if err != nil {
+		logger.Errorf("Error handling proxy: %v", err)
+		close(failCh)
+	}
+	return err
+}
+
+func (s *Server) sendFailureResponse(conn net.Conn, failCh <-chan struct{}) {
+	select {
+	case <-failCh:
+		if err := proto.Send(conn, proto.NewMsgProxyResp("", "failed")); err != nil {
+			logger.Errorf("Error sending proxy failed resp message: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		// TODO: when timeout, do what?
+	}
+}
+
+func (s *Server) handleExchange(conn net.Conn, buf []byte) error {
+	msg := &proto.MsgExchange{}
+	if err := json.Unmarshal(buf, msg); err != nil {
+		return fmt.Errorf("error unmarshalling exchange message: %v", err)
+	}
+
+	return s.handleExchangeMsg(conn, msg)
+}
+
+func (s *Server) handleProxyCancel(conn net.Conn, buf []byte) error {
+	msg := &proto.NewProxyCancel{}
+	if err := json.Unmarshal(buf, msg); err != nil {
+		return fmt.Errorf("error unmarshalling proxy cancel message: %v", err)
+	}
+
+	defer conn.Close()
+	s.removeProxy(msg.RemotePort)
+	logger.Infof("Proxy port %d canceled", msg.RemotePort)
+	return nil
+}
+
+func (s *Server) authCheckConn(conn net.Conn) error {
 	loginMsg := proto.MsgLogin{}
 	if err := proto.Recv(conn, &loginMsg); err != nil {
 		logger.Errorf("Error reading from connection: %v", err)
@@ -213,17 +245,11 @@ func (s *Server) authCheckConn(conn net.Conn, token string) error {
 	return nil
 }
 
-func (s *Server) handleCancel(msg *proto.NewProxyCancel) {
-	s.removeProxy(msg.RemotePort)
-	logger.Infof("Proxy port %d canceled", msg.RemotePort)
-}
-
-func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan struct{}) {
+func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan struct{}) error {
 	uPort := msg.RemotePort
 	if !s.isVailablePort(uPort) {
-		logger.Errorf("Invalid proxy to port: %d", uPort)
 		failCh <- struct{}{}
-		return
+		return fmt.Errorf("invalid proxy to port: %d", uPort)
 	}
 
 	var domain string
@@ -231,15 +257,13 @@ func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan
 	if s.cfg.DomainTunnel {
 		domain, err = s.distrDomain(msg.Subdomain)
 		if err != nil {
-			logger.Errorf("Invalid subdomain: %s, err: %v", msg.Subdomain, err)
 			failCh <- struct{}{}
-			return
+			return fmt.Errorf("invalid subdomain: %s", msg.Subdomain)
 		}
 
 		if err := addCaddyRouter(domain, uPort); err != nil {
-			logger.Errorf("Error adding caddy router: %v", err)
 			failCh <- struct{}{}
-			return
+			return fmt.Errorf("error adding caddy router: %v", err)
 		}
 	}
 
@@ -249,14 +273,16 @@ func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan
 	case "udp":
 		err = s.handleUDPProxy(uPort, domain, cConn, msg)
 	default:
-		logger.Errorf("Invalid proxy type: %s", msg.ProxyType)
 		failCh <- struct{}{}
-		return
+		return fmt.Errorf("invalid proxy type: %s", msg.ProxyType)
 	}
 
 	if err != nil {
 		failCh <- struct{}{}
+		return err
 	}
+
+	return nil
 }
 
 func (s *Server) handleUDPProxy(uPort int, domain string, cConn net.Conn, msg *proto.MsgProxyReq) error {
@@ -375,13 +401,13 @@ func tickHeart(cConn net.Conn, hlogger *logger.Logger) {
 	}
 }
 
-func (s *Server) handleExchange(conn net.Conn, msg *proto.MsgExchange) {
+func (s *Server) handleExchangeMsg(conn net.Conn, msg *proto.MsgExchange) error {
 	switch msg.ProxyType {
 	case "udp":
 		logger.Debugf("Receive udp conn exchange msg from client: %s", msg.ConnId)
 		uConn, ok := s.udpConnMap.Get(msg.ConnId)
 		if !ok {
-			return
+			return fmt.Errorf("udp connection not found: %s", msg.ConnId)
 		}
 		defer s.udpConnMap.Del(msg.ConnId)
 		proxy.UDPDatagram(conn, uConn)
@@ -389,12 +415,16 @@ func (s *Server) handleExchange(conn net.Conn, msg *proto.MsgExchange) {
 		logger.Debugf("Receive tcp conn exchange msg from client: %s", msg.ConnId)
 		uConn, ok := s.tcpConnMap.Get(msg.ConnId)
 		if !ok {
-			return
+			return fmt.Errorf("tcp connection not found: %s", msg.ConnId)
 		}
 
 		defer s.tcpConnMap.Del(msg.ConnId)
 		proxy.Stream(conn, uConn)
+	default:
+		return fmt.Errorf("invalid proxy type: %s", msg.ProxyType)
 	}
+
+	return nil
 }
 
 func (s *Server) isVailablePort(port int) bool {

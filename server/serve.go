@@ -49,20 +49,35 @@ func newServer(cfg Config) *Server {
 }
 
 func (s *Server) Run() {
+	s.startAdminServer()
+	s.startProxyServer()
+}
+
+func (s *Server) startAdminServer() {
 	if s.cfg.AdminPort != 0 {
 		go s.startAdmin()
 	}
+}
 
+func (s *Server) startProxyServer() {
 	go s.tcpConnMap.StartAutoExpire()
 
+	listener := s.createListener()
+	defer listener.Close()
+
+	s.acceptConnections(listener)
+}
+
+func (s *Server) createListener() net.Listener {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.Port))
 	if err != nil {
 		logger.Fatalf("Error listening: %v", err)
 	}
-	defer listener.Close()
-
 	logger.Infof("Server listening on port %d", s.cfg.Port)
+	return listener
+}
 
+func (s *Server) acceptConnections(listener net.Listener) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -70,32 +85,43 @@ func (s *Server) Run() {
 			return
 		}
 
-		if s.cfg.Multiplex {
-			go func() {
-				session, err := s.newMuxSession(conn)
-				if session == nil {
-					conn.Close()
-					return
-				}
-				if err != nil {
-					logger.Errorf("Error creating yamux session: %v", err)
-					return
-				}
-				for {
-					stream, err := session.AcceptStream()
-					if err != nil {
-						logger.Errorf("Error accepting stream: %v", err)
-						return
-					}
-					logger.Debugf("New yamux connection, client addr: %s", conn.RemoteAddr().String())
+		s.handleConnection(conn)
+	}
+}
 
-					go s.handle(stream, true)
-				}
-			}()
-			continue
-		}
-
+func (s *Server) handleConnection(conn net.Conn) {
+	if s.cfg.Multiplex {
+		s.handleMultiplexConnection(conn)
+	} else {
 		go s.handle(conn, false)
+	}
+}
+
+func (s *Server) handleMultiplexConnection(conn net.Conn) {
+	go func() {
+		session, err := s.newMuxSession(conn)
+		if session == nil {
+			conn.Close()
+			return
+		}
+		if err != nil {
+			logger.Errorf("Error creating yamux session: %v", err)
+			return
+		}
+		s.handleMuxSession(session, conn)
+	}()
+}
+
+func (s *Server) handleMuxSession(session *yamux.Session, conn net.Conn) {
+	for {
+		stream, err := session.AcceptStream()
+		if err != nil {
+			logger.Errorf("Error accepting stream: %v", err)
+			return
+		}
+		logger.Debugf("New yamux connection, client addr: %s", conn.RemoteAddr().String())
+
+		go s.handle(stream, true)
 	}
 }
 

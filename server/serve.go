@@ -149,17 +149,15 @@ func (s *Server) handle(conn net.Conn, mux bool) {
 		}
 	}
 
-	for {
-		pt, buf, err := proto.Read(conn)
-		if err != nil {
-			logger.Errorf("Error reading packet: %v", err)
-			return
-		}
+	pt, buf, err := proto.Read(conn)
+	if err != nil {
+		logger.Errorf("Error reading packet: %v", err)
+		return
+	}
 
-		if err := s.handlePacket(conn, pt, buf); err != nil {
-			logger.Errorf("Error handling packet: %v", err)
-			return
-		}
+	if err := s.handlePacket(conn, pt, buf); err != nil {
+		logger.Errorf("Error handling packet: %v", err)
+		return
 	}
 }
 

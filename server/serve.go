@@ -250,31 +250,19 @@ func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan
 		return fmt.Errorf("invalid proxy to port: %d", uPort)
 	}
 
-	var domain string
-	var err error
-	if s.cfg.DomainTunnel {
-		domain, err = s.distrDomain(msg.Subdomain)
-		if err != nil {
-			failCh <- struct{}{}
-			return fmt.Errorf("invalid subdomain: %s", msg.Subdomain)
-		}
-
-		if err := addCaddyRouter(domain, uPort); err != nil {
-			failCh <- struct{}{}
-			return fmt.Errorf("error adding caddy router: %v", err)
-		}
-	}
-
-	switch msg.ProxyType {
-	case "tcp":
-		err = s.handleTCPProxy(uPort, domain, cConn, msg)
-	case "udp":
-		err = s.handleUDPProxy(uPort, domain, cConn, msg)
-	default:
+	domain, err := s.setupDomain(msg.Subdomain, uPort)
+	if err != nil {
 		failCh <- struct{}{}
-		return fmt.Errorf("invalid proxy type: %s", msg.ProxyType)
+		return err
 	}
 
+	proxyHandler, err := s.createProxyHandler(msg.ProxyType)
+	if err != nil {
+		failCh <- struct{}{}
+		return err
+	}
+
+	err = s.setupAndRunProxy(proxyHandler, uPort, domain, cConn, msg)
 	if err != nil {
 		failCh <- struct{}{}
 		return err
@@ -283,108 +271,105 @@ func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan
 	return nil
 }
 
-func (s *Server) handleUDPProxy(uPort int, domain string, cConn net.Conn, msg *proto.MsgProxyReq) error {
-	from := cConn.RemoteAddr().String()
-
-	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.ParseIP("0.0.0.0"),
-		Port: uPort,
-	})
-	if err != nil {
-		logger.Errorf("Error listening: %v, port: %d, type: %s", err, uPort, msg.ProxyType)
-		return fmt.Errorf("error listening: %v", err)
-	}
-	// defer udpConn.Close() // don't close
-
-	logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
-
+func (s *Server) setupDomain(subdomain string, uPort int) (string, error) {
+	var domain string
+	var err error
 	if s.cfg.DomainTunnel {
-		domain, err = s.distrDomain(msg.Subdomain)
+		domain, err = s.distrDomain(subdomain)
 		if err != nil {
-			logger.Errorf("Invalid subdomain: %s, err: %v", msg.Subdomain, err)
-			return fmt.Errorf("invalid subdomain: %s", msg.Subdomain)
+			return "", fmt.Errorf("invalid subdomain: %s", subdomain)
+		}
+
+		if err := addCaddyRouter(domain, uPort); err != nil {
+			return "", fmt.Errorf("error adding caddy router: %v", err)
 		}
 	}
-
-	s.flushProxy(Proxy{
-		To:      uPort,
-		From:    from,
-		Domain:  domain,
-		uCloser: udpConn,
-	})
-
-	logger.Infof("Receive proxy from %s to port %d", from, uPort)
-	logger.Infof("Send proxy accept msg to client: %s", from)
-
-	if err = proto.Send(cConn, proto.NewMsgProxyResp(domain, "success")); err != nil {
-		logger.Errorf("Error sending proxy accept message: %v", err)
-		return fmt.Errorf("error sending proxy accept message: %v", err)
-	}
-
-	go tickHeart(cConn, logger.New(fmt.Sprintf("[:%d]", uPort)))
-
-	uid := conn.NewUuid()
-	s.udpConnMap.Add(uid, udpConn)
-	if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
-		logger.Errorf("Error sending exchange message: %v", err)
-	}
-
-	logger.Debugf("Send udp listener to client, id: %s", uid)
-	return nil
+	return domain, nil
 }
 
-func (s *Server) handleTCPProxy(uPort int, domain string, cConn net.Conn, msg *proto.MsgProxyReq) error {
-	from := cConn.RemoteAddr().String()
+type proxyHandler interface {
+	listen(uPort int) (interface{}, error)
+	handleConn(s *Server, listener interface{}, cConn net.Conn, msg *proto.MsgProxyReq) error
+}
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", uPort))
-	if err != nil {
-		logger.Errorf("Error listening: %v, port: %d, type: %s", err, uPort, msg.ProxyType)
-		return fmt.Errorf("error listening: %v", err)
-	}
-	defer listener.Close()
+type tcpProxyHandler struct{}
 
-	logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
+func (h *tcpProxyHandler) listen(uPort int) (interface{}, error) {
+	return net.Listen("tcp", fmt.Sprintf(":%d", uPort))
+}
 
-	if s.cfg.DomainTunnel {
-		domain, err = s.distrDomain(msg.Subdomain)
-		if err != nil {
-			logger.Errorf("Invalid subdomain: %s, err: %v", msg.Subdomain, err)
-			return fmt.Errorf("invalid subdomain: %s", msg.Subdomain)
-		}
-	}
-
-	s.flushProxy(Proxy{
-		To:      uPort,
-		From:    from,
-		Domain:  domain,
-		uCloser: listener,
-	})
-
-	logger.Infof("Receive proxy from %s to port %d", from, uPort)
-	logger.Infof("Send proxy accept msg to client: %s", from)
-
-	if err = proto.Send(cConn, proto.NewMsgProxyResp(domain, "success")); err != nil {
-		logger.Errorf("Error sending proxy accept message: %v", err)
-		return fmt.Errorf("error sending proxy accept message: %v", err)
-	}
-
-	go tickHeart(cConn, logger.New(fmt.Sprintf("[:%d]", uPort)))
-
+func (h *tcpProxyHandler) handleConn(s *Server, listener interface{}, cConn net.Conn, msg *proto.MsgProxyReq) error {
+	tcpListener := listener.(net.Listener)
 	for {
-		userConn, err := listener.Accept()
+		userConn, err := tcpListener.Accept()
 		if err != nil {
 			return fmt.Errorf("error accepting: %v", err)
 		}
-		logger.Debugf("Receive new user conn: %s", userConn.RemoteAddr().String())
-		go func() {
-			uid := conn.NewUuid()
-			s.tcpConnMap.Add(uid, userConn)
-			if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
-				logger.Errorf("Error sending exchange message: %v", err)
-			}
-			logger.Debugf("Send new user conn id: %s", uid)
-		}()
+		go s.handleTCPUserConn(userConn, cConn, msg)
 	}
+}
+
+type udpProxyHandler struct{}
+
+func (h *udpProxyHandler) listen(uPort int) (interface{}, error) {
+	return net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: uPort})
+}
+
+func (h *udpProxyHandler) handleConn(s *Server, conn interface{}, cConn net.Conn, msg *proto.MsgProxyReq) error {
+	udpConn := conn.(*net.UDPConn)
+	uid := uuid.New().String()
+	s.udpConnMap.Add(uid, udpConn)
+	if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
+		return fmt.Errorf("error sending exchange message: %v", err)
+	}
+	return nil
+}
+
+func (s *Server) createProxyHandler(proxyType string) (proxyHandler, error) {
+	switch proxyType {
+	case "tcp":
+		return &tcpProxyHandler{}, nil
+	case "udp":
+		return &udpProxyHandler{}, nil
+	default:
+		return nil, fmt.Errorf("invalid proxy type: %s", proxyType)
+	}
+}
+
+func (s *Server) setupAndRunProxy(handler proxyHandler, uPort int, domain string, cConn net.Conn, msg *proto.MsgProxyReq) error {
+	listener, err := handler.listen(uPort)
+	if err != nil {
+		return fmt.Errorf("error listening: %v", err)
+	}
+
+	from := cConn.RemoteAddr().String()
+	s.flushProxy(Proxy{
+		To:      uPort,
+		From:    from,
+		Domain:  domain,
+		uCloser: listener.(io.Closer),
+	})
+
+	logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
+	logger.Infof("Receive proxy from %s to port %d", from, uPort)
+	logger.Infof("Send proxy accept msg to client: %s", from)
+
+	if err = proto.Send(cConn, proto.NewMsgProxyResp(domain, "success")); err != nil {
+		return fmt.Errorf("error sending proxy accept message: %v", err)
+	}
+
+	go tickHeart(cConn, logger.New(fmt.Sprintf("[:%d]", uPort)))
+
+	return handler.handleConn(s, listener, cConn, msg)
+}
+
+func (s *Server) handleTCPUserConn(userConn net.Conn, cConn net.Conn, msg *proto.MsgProxyReq) {
+	uid := conn.NewUuid()
+	s.tcpConnMap.Add(uid, userConn)
+	if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
+		logger.Errorf("Error sending exchange message: %v", err)
+	}
+	logger.Debugf("Send new user conn id: %s", uid)
 }
 
 func tickHeart(cConn net.Conn, hlogger *logger.Logger) {

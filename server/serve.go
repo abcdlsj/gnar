@@ -256,7 +256,7 @@ func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan
 		return err
 	}
 
-	proxyHandler, err := s.createProxyHandler(msg.ProxyType)
+	proxyHandler, err := s.createProxyHandler(msg.ProxyType, uPort)
 	if err != nil {
 		failCh <- struct{}{}
 		return err
@@ -288,14 +288,16 @@ func (s *Server) setupDomain(subdomain string, uPort int) (string, error) {
 }
 
 type proxyHandler interface {
-	listen(uPort int) (interface{}, error)
+	listen() (interface{}, error)
 	handleConn(s *Server, listener interface{}, cConn net.Conn, msg *proto.MsgProxyReq) error
 }
 
-type tcpProxyHandler struct{}
+type tcpProxyHandler struct {
+	uPort int
+}
 
-func (h *tcpProxyHandler) listen(uPort int) (interface{}, error) {
-	return net.Listen("tcp", fmt.Sprintf(":%d", uPort))
+func (h *tcpProxyHandler) listen() (interface{}, error) {
+	return net.Listen("tcp", fmt.Sprintf(":%d", h.uPort))
 }
 
 func (h *tcpProxyHandler) handleConn(s *Server, listener interface{}, cConn net.Conn, msg *proto.MsgProxyReq) error {
@@ -309,10 +311,12 @@ func (h *tcpProxyHandler) handleConn(s *Server, listener interface{}, cConn net.
 	}
 }
 
-type udpProxyHandler struct{}
+type udpProxyHandler struct {
+	uPort int
+}
 
-func (h *udpProxyHandler) listen(uPort int) (interface{}, error) {
-	return net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: uPort})
+func (h *udpProxyHandler) listen() (interface{}, error) {
+	return net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: h.uPort})
 }
 
 func (h *udpProxyHandler) handleConn(s *Server, conn interface{}, cConn net.Conn, msg *proto.MsgProxyReq) error {
@@ -325,19 +329,19 @@ func (h *udpProxyHandler) handleConn(s *Server, conn interface{}, cConn net.Conn
 	return nil
 }
 
-func (s *Server) createProxyHandler(proxyType string) (proxyHandler, error) {
+func (s *Server) createProxyHandler(proxyType string, uPort int) (proxyHandler, error) {
 	switch proxyType {
 	case "tcp":
-		return &tcpProxyHandler{}, nil
+		return &tcpProxyHandler{uPort}, nil
 	case "udp":
-		return &udpProxyHandler{}, nil
+		return &udpProxyHandler{uPort}, nil
 	default:
 		return nil, fmt.Errorf("invalid proxy type: %s", proxyType)
 	}
 }
 
 func (s *Server) setupAndRunProxy(handler proxyHandler, uPort int, domain string, cConn net.Conn, msg *proto.MsgProxyReq) error {
-	listener, err := handler.listen(uPort)
+	listener, err := handler.listen()
 	if err != nil {
 		return fmt.Errorf("error listening: %v", err)
 	}

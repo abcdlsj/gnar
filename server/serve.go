@@ -23,12 +23,23 @@ type Server struct {
 	cfg           Config
 	tcpConnMap    conn.TCPConnMap
 	udpConnMap    conn.UDPConnMap
+	authenticator auth.Authenticator
+	resources     *resourceManager
+}
+
+type resourceManager struct {
+	proxys        []Proxy
 	portManager   map[int]bool
 	domainManager map[string]bool
-	authenticator auth.Authenticator
-	proxys        []Proxy
+	m             sync.RWMutex
+}
 
-	m sync.RWMutex
+func newResourceManager() *resourceManager {
+	return &resourceManager{
+		proxys:        []Proxy{},
+		portManager:   make(map[int]bool),
+		domainManager: make(map[string]bool),
+	}
 }
 
 func newServer(cfg Config) *Server {
@@ -36,9 +47,8 @@ func newServer(cfg Config) *Server {
 		cfg:           cfg,
 		tcpConnMap:    conn.NewTCPConnMap(),
 		udpConnMap:    conn.NewUDPConnMap(),
-		portManager:   make(map[int]bool),
-		domainManager: make(map[string]bool),
 		authenticator: &auth.Nop{},
+		resources:     newResourceManager(),
 	}
 
 	if s.cfg.Token != "" {
@@ -218,7 +228,7 @@ func (s *Server) handleProxyCancel(conn net.Conn, buf []byte) error {
 	}
 
 	defer conn.Close()
-	s.removeProxy(msg.RemotePort)
+	s.resources.removeProxy(msg.RemotePort)
 	logger.Infof("Proxy port %d canceled", msg.RemotePort)
 	return nil
 }
@@ -245,12 +255,12 @@ func (s *Server) authCheckConn(conn net.Conn) error {
 
 func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan struct{}) error {
 	uPort := msg.RemotePort
-	if !s.isVailablePort(uPort) {
+	if !s.resources.isAvailablePort(uPort) {
 		failCh <- struct{}{}
 		return fmt.Errorf("invalid proxy to port: %d", uPort)
 	}
 
-	domain, err := s.setupDomain(msg.Subdomain, uPort)
+	domain, err := s.resources.distrDomain(msg.Subdomain, s.cfg, uPort)
 	if err != nil {
 		failCh <- struct{}{}
 		return err
@@ -271,20 +281,28 @@ func (s *Server) handleProxy(cConn net.Conn, msg *proto.MsgProxyReq, failCh chan
 	return nil
 }
 
-func (s *Server) setupDomain(subdomain string, uPort int) (string, error) {
-	var domain string
-	var err error
-	if s.cfg.DomainTunnel {
-		domain, err = s.distrDomain(subdomain)
-		if err != nil {
-			return "", fmt.Errorf("invalid subdomain: %s", subdomain)
-		}
+func (rm *resourceManager) distrDomain(sub string, cfg Config, uPort int) (string, error) {
+	rm.m.Lock()
+	defer rm.m.Unlock()
 
-		if err := addCaddyRouter(domain, uPort); err != nil {
-			return "", fmt.Errorf("error adding caddy router: %v", err)
-		}
+	if !cfg.DomainTunnel {
+		return "", nil
 	}
-	return domain, nil
+
+	if sub == "" {
+		sub = uuid.NewString()[:10]
+	}
+
+	domain := fmt.Sprintf("%s.%s", sub, cfg.Domain)
+
+	if !rm.domainManager[domain] {
+		if err := addCaddyRouter(domain, uPort); err != nil {
+			return "", err
+		}
+		return domain, nil
+	}
+
+	return domain, errors.New("domain already used")
 }
 
 type proxyHandler interface {
@@ -347,11 +365,11 @@ func (s *Server) setupAndRunProxy(handler proxyHandler, uPort int, domain string
 	}
 
 	from := cConn.RemoteAddr().String()
-	s.flushProxy(Proxy{
-		To:      uPort,
-		From:    from,
-		Domain:  domain,
-		uCloser: listener.(io.Closer),
+	s.resources.addProxy(Proxy{
+		Port:   uPort,
+		From:   from,
+		Domain: domain,
+		Closer: listener.(io.Closer),
 	})
 
 	logger.Infof("Listening on proxying port %d, type: %s", uPort, msg.ProxyType)
@@ -414,62 +432,41 @@ func (s *Server) handleExchangeMsg(conn net.Conn, msg *proto.MsgExchange) error 
 	return nil
 }
 
-func (s *Server) isVailablePort(port int) bool {
-	s.m.Lock()
-	defer s.m.Unlock()
-
-	return port > 0 && port < 65535 && !s.portManager[port]
-}
-func (s *Server) distrDomain(sub string) (string, error) {
-	s.m.Lock()
-	defer s.m.Unlock()
-
-	if !s.cfg.DomainTunnel {
-		return "", nil
-	}
-
-	if sub == "" {
-		sub = uuid.NewString()[:10]
-	}
-
-	domain := fmt.Sprintf("%s.%s", sub, s.cfg.Domain)
-
-	if !s.domainManager[domain] {
-		return domain, nil
-	}
-
-	return domain, errors.New("domain already used")
+func (rm *resourceManager) isAvailablePort(port int) bool {
+	rm.m.RLock()
+	defer rm.m.RUnlock()
+	return port > 0 && port < 65535 && !rm.portManager[port]
 }
 
-type Proxy struct {
-	To      int
-	From    string
-	Domain  string
-	uCloser io.Closer
+func (rm *resourceManager) addProxy(f Proxy) {
+	rm.m.Lock()
+	defer rm.m.Unlock()
+
+	rm.proxys = append(rm.proxys, f)
+	rm.portManager[f.Port] = true
+	rm.domainManager[f.Domain] = true
 }
 
-func (s *Server) flushProxy(f Proxy) {
-	s.m.Lock()
-	defer s.m.Unlock()
-
-	s.proxys = append(s.proxys, f)
-	s.portManager[f.To] = true
-	s.domainManager[f.Domain] = true
-}
-
-func (s *Server) removeProxy(to int) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	for i, ff := range s.proxys {
-		if ff.To == to {
-			ff.uCloser.Close()
-			if s.cfg.DomainTunnel {
-				delCaddyRouter(fmt.Sprintf("%s.%d", ff.Domain, ff.To))
+func (rm *resourceManager) removeProxy(port int) {
+	rm.m.Lock()
+	defer rm.m.Unlock()
+	for i, proxy := range rm.proxys {
+		if proxy.Port == port {
+			proxy.Closer.Close()
+			if rm.domainManager[proxy.Domain] {
+				delCaddyRouter(fmt.Sprintf("%s.%d", proxy.Domain, proxy.Port))
 			}
-			s.proxys = append(s.proxys[:i], s.proxys[i+1:]...)
-			s.portManager[ff.To] = false
-			s.domainManager[ff.Domain] = false
+			rm.proxys = append(rm.proxys[:i], rm.proxys[i+1:]...)
+			delete(rm.portManager, proxy.Port)
+			delete(rm.domainManager, proxy.Domain)
 			return
 		}
 	}
+}
+
+type Proxy struct {
+	Port   int
+	From   string
+	Domain string
+	Closer io.Closer
 }

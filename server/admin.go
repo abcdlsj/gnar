@@ -26,7 +26,7 @@ func (s *Server) startAdmin() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if err := tmpl.ExecuteTemplate(w, "index.html", map[string]any{
-			"proxys": s.proxys,
+			"proxys": s.resources.proxys, // 更改 s.rm 为 s.resources
 		}); err != nil {
 			logger.Errorf("execute index.html error: %v", err)
 		}
@@ -34,7 +34,7 @@ func (s *Server) startAdmin() {
 
 	http.HandleFunc("/admin/tunnel/close", func(w http.ResponseWriter, r *http.Request) {
 		type Req struct {
-			To int `json:"to"`
+			Port int `json:"port"` // 更改 To 为 Port
 		}
 
 		var msg = "Close tunnel success"
@@ -55,8 +55,8 @@ func (s *Server) startAdmin() {
 			return
 		}
 
-		logger.Infof("Receive close admin call, close proxy, port %d", req.To)
-		s.removeProxy(req.To)
+		logger.Infof("Receive close admin call, close proxy, port %d", req.Port)
+		s.resources.removeProxy(req.Port)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(msg))
 	})

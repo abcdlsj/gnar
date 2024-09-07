@@ -1,6 +1,6 @@
 <!-- TOC start (generated with https://github.com/derlin/bitdowntoc) -->
 
-- [Gnar: A Versatile Proxy Tool with Auto-HTTPS Subdomain Support](#gnar-a-versatile-proxy-tool-with-auto-https-subdomain-support)
+- [Gnar](#gnar)
   - [Features](#features)
   - [Installation](#installation)
   - [Quick Start](#quick-start)
@@ -18,7 +18,9 @@
 <!-- TOC end -->
 
 <!-- TOC --><a name="gnar"></a>
-# Gnar: A Versatile Proxy Tool with Auto-HTTPS Subdomain Support
+# Gnar
+
+A Versatile Proxy Tool with Auto-HTTPS Subdomain Support.
 
 ![demo](./demo.gif)
 

@@ -19,7 +19,6 @@
 
 <!-- TOC --><a name="gnar"></a>
 # Gnar
-![server admin screenshot](assets/server_admin_screenshot.png)
 A Versatile Proxy Tool with Auto-HTTPS Subdomain Support.
 
 ![run gif](assets/run.gif)
@@ -158,6 +157,10 @@ domain-tunnel = false
 domain = "example.com"
 # token = "abcdlsj" # optional
 ```
+
+Server admin panel:
+
+![server admin screenshot](assets/server_admin_screenshot.png)
 
 ## Advanced Usage
 

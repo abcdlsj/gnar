@@ -14,6 +14,7 @@ import (
 	"github.com/abcdlsj/gnar/client/tunnel"
 	"github.com/abcdlsj/gnar/logger"
 	"github.com/abcdlsj/gnar/proto"
+	"github.com/abcdlsj/gnar/share"
 	"github.com/abcdlsj/gnar/terminal"
 )
 
@@ -84,6 +85,7 @@ func (f *Proxyer) cancel() {
 }
 
 func (c *Client) Run() error {
+	c.printMetaInfo()
 	if len(c.cfg.Proxys) == 0 {
 		logger.Error("No proxy config found, please check your config")
 		return nil
@@ -193,4 +195,34 @@ func (f *Proxyer) mustNewProxy(rConn net.Conn) {
 	} else {
 		f.logger.Info("Proxy create success!")
 	}
+}
+
+func (c *Client) printMetaInfo() {
+	fmt.Println("---")
+	fmt.Println("Gnar Client")
+	fmt.Printf("Version: %s\n", share.GetVersion())
+	fmt.Printf("Server Address: %s\n", c.cfg.SvrAddr)
+	fmt.Printf("Token Authentication: %v\n", c.cfg.Token != "")
+	fmt.Printf("Multiplex: %v\n", c.cfg.Multiplex)
+	fmt.Println("Proxies:")
+	for _, proxy := range c.cfg.Proxys {
+		name := proxy.ProxyName
+		if name == "" {
+			name = "<empty>"
+		}
+		fmt.Printf("  - Name: %s\n", name)
+		fmt.Printf("    Local Port: %d\n", proxy.LocalPort)
+		fmt.Printf("    Remote Port: %d\n", proxy.RemotePort)
+		fmt.Printf("    Type: %s\n", proxy.ProxyType)
+		fmt.Printf("    Subdomain: %s\n", getValueOrEmpty(proxy.Subdomain))
+		fmt.Printf("    Speed Limit: %s\n", getValueOrEmpty(proxy.SpeedLimit))
+	}
+	fmt.Println("---")
+}
+
+func getValueOrEmpty(s string) string {
+	if s == "" {
+		return "<empty>"
+	}
+	return s
 }

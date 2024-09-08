@@ -61,9 +61,24 @@ func newServer(cfg Config) *Server {
 }
 
 func (s *Server) Run() error {
+	s.printMetaInfo()
 	s.startAdminServer()
 	s.startProxyServer()
 	return nil
+}
+
+func (s *Server) printMetaInfo() {
+	fmt.Println("---")
+	fmt.Println("Gnar Server")
+	fmt.Printf("Version: %s\n", share.GetVersion())
+	fmt.Printf("Port: %d\n", s.cfg.Port)
+	fmt.Printf("Admin Port: %d\n", s.cfg.AdminPort)
+	fmt.Printf("Domain Tunnel: %v\n", s.cfg.DomainTunnel)
+	fmt.Printf("Domain: %s\n", s.cfg.Domain)
+	fmt.Printf("Token Authentication: %v\n", s.cfg.Token != "")
+	fmt.Printf("Multiplex: %v\n", s.cfg.Multiplex)
+	fmt.Printf("Caddy Server Name: %s\n", s.cfg.CaddySrvName)
+	fmt.Println("---")
 }
 
 func (s *Server) startAdminServer() {

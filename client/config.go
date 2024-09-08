@@ -45,16 +45,27 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 		return config, fmt.Errorf("error unmarshaling config: %v", err)
 	}
 
+	proxy := Proxy{
+		ProxyName:  viper.GetString("proxy-name"),
+		Subdomain:  viper.GetString("subdomain"),
+		SpeedLimit: viper.GetString("speed-limit"),
+		ProxyType:  viper.GetString("proxy-type"),
+	}
+
 	if len(args) > 0 {
 		config.SvrAddr = args[0]
 	}
+
 	if len(args) > 1 {
-		proxy, err := parseProxyArg(args[1])
+		localRemote, err := parseProxyArg(args[1])
 		if err != nil {
 			return config, err
 		}
-		config.Proxys = []Proxy{proxy}
+		proxy.LocalPort = localRemote.LocalPort
+		proxy.RemotePort = localRemote.RemotePort
 	}
+
+	config.Proxys = []Proxy{proxy}
 
 	return config, nil
 }

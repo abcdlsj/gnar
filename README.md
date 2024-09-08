@@ -174,6 +174,9 @@ domain = "example.com"
 multiplex = false
 ```
 
+Server admin panel:
+![server admin screenshot](assets/server_admin_screenshot.png)
+
 ### Positional Arguments
 
 #### Server

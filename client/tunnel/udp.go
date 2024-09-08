@@ -29,7 +29,7 @@ func (u *UDP) Run() {
 	})
 
 	if err != nil {
-		u.logger.Errorf("Error connecting to local: %v, will close proxy, %s:%d", err, u.lport)
+		u.logger.Errorf("Error connecting to local: %v, port: %d", err, u.lport)
 		return
 	}
 

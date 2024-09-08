@@ -26,7 +26,7 @@ func NewTCP(lport int, rconn io.ReadWriteCloser, tlogger *logger.Logger) *TCP {
 func (t *TCP) Run() {
 	lConn, err := net.Dial("tcp", fmt.Sprintf(":%d", t.lport))
 	if err != nil {
-		t.logger.Errorf("Error connecting to local: %v, will close proxy", err)
+		t.logger.Errorf("Error connecting to local: %v, port: %d", err, t.lport)
 		return
 	}
 

@@ -271,7 +271,10 @@ primary_region = "hkg"
     handlers = ["tls", "http"]
     port = 9000
 ```
-This can view `xxxx.fly.dev:9000` and then view your own internal server.
+
+Run with `fly launch`.
+
+After deployment, you can view `xxxx.fly.dev:9000` and then view your own internal server.
 
 ## Environment Variables
 

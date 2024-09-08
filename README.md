@@ -231,6 +231,9 @@ If these arguments are not provided, the values from the configuration file or d
 
 Gnar can be easily deployed on <https://fly.io>.
 
+> [!WARNING]
+> I haven't tested it for a long time, it may need to be updated.
+
 You can edit `entrypoint.sh` to start your own server **you need to special set forward port.**
 
 Example:

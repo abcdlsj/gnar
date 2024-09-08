@@ -4,7 +4,7 @@ help:
 	@echo "Usage: make [target]"
 
 build:
-	go build -ldflags "-X github.com/abcdlsj/gnar/share.BuildStamp=`date +'%Y-%m-%d_%H:%M.%S'` -X github.com/abcdlsj/gnar/share.GitHash=`git rev-parse --short HEAD`"
+	go build -o gnar -ldflags "-X github.com/abcdlsj/gnar/pkg/share.BuildStamp=`date +'%Y-%m-%d_%H:%M.%S'` -X github.com/abcdlsj/gnar/pkg/share.GitHash=`git rev-parse --short HEAD`" ./cmd/gnar
 
 install: build
 	rm ${GOPATH}/bin/gnar 2> /dev/null || true
@@ -14,15 +14,15 @@ clean:
 	rm -f ./gnar
 
 test:
-	go test -v ./tests/integration/...
+	go test -v ./test/integration/...
 
 test_server:
-	go test -v ./tests/integration/server_test.go
+	go test -v ./test/integration/server_test.go
 
 test_client:
-	go test -v ./tests/integration/client_test.go
+	go test -v ./test/integration/client_test.go
 
 test_mux:
-	go test -v ./tests/integration/mux_test.go
+	go test -v ./test/integration/mux_test.go
 
 .PHONY: help build install clean test

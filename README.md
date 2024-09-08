@@ -218,7 +218,7 @@ If these arguments are not provided, the values from the configuration file or d
 
 2. Start the Caddy server(or if you have running caddy, you can skip this step):
    ```bash
-   caddy run --config <gnar path>/server/caddy.json
+   caddy run --config <gnar path>/configs/caddy.json
    ```
 
 3. Run the Gnar server with domain tunnel enabled:

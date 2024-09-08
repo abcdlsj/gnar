@@ -30,7 +30,6 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("GNAR")
-	viper.BindEnv("server-addr")
 	viper.BindEnv("token")
 	viper.BindEnv("multiplex")
 
@@ -38,7 +37,7 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 		viper.SetConfigFile(cfgFile)
 		viper.SetConfigType("toml")
 		if err := viper.ReadInConfig(); err != nil {
-			return config, fmt.Errorf("Error reading config file: %v", err)
+			return config, fmt.Errorf("error reading config file: %v", err)
 		}
 	}
 
@@ -54,7 +53,7 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 	}
 
 	if err := viper.Unmarshal(&config); err != nil {
-		return config, fmt.Errorf("Error unmarshaling config: %v", err)
+		return config, fmt.Errorf("error unmarshaling config: %v", err)
 	}
 
 	return config, nil
@@ -63,17 +62,17 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 func parseProxyArg(arg string) (Proxy, error) {
 	parts := strings.Split(arg, ":")
 	if len(parts) != 2 {
-		return Proxy{}, fmt.Errorf("Invalid proxy format. Expected localPort:remotePort")
+		return Proxy{}, fmt.Errorf("invalid proxy format. Expected localPort:remotePort")
 	}
 
 	localPort, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return Proxy{}, fmt.Errorf("Invalid local port: %v", err)
+		return Proxy{}, fmt.Errorf("invalid local port: %v", err)
 	}
 
 	remotePort, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return Proxy{}, fmt.Errorf("Invalid remote port: %v", err)
+		return Proxy{}, fmt.Errorf("invalid remote port: %v", err)
 	}
 
 	return Proxy{

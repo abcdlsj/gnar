@@ -18,7 +18,7 @@ type Config struct {
 
 func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 	viper.SetDefault("port", 8910)
-	viper.SetDefault("admin-port", 8911)
+	// viper.SetDefault("admin-port", 8911) // default 0, disabled
 	viper.SetDefault("domain-tunnel", false)
 	viper.SetDefault("multiplex", false)
 
@@ -35,20 +35,20 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 		viper.SetConfigFile(cfgFile)
 		viper.SetConfigType("toml")
 		if err := viper.ReadInConfig(); err != nil {
-			return config, fmt.Errorf("Error reading config file: %v", err)
+			return config, fmt.Errorf("error reading config file: %v", err)
 		}
 	}
 
 	if len(args) > 0 {
 		port, err := strconv.Atoi(args[0])
 		if err != nil {
-			return config, fmt.Errorf("Invalid port number: %v", err)
+			return config, fmt.Errorf("invalid port number: %v", err)
 		}
 		config.Port = port
 	}
 
 	if err := viper.Unmarshal(&config); err != nil {
-		return config, fmt.Errorf("Error unmarshaling config: %v", err)
+		return config, fmt.Errorf("error unmarshaling config: %v", err)
 	}
 
 	return config, nil

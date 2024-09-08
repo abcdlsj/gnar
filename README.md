@@ -17,6 +17,9 @@
   - [Advanced Usage](#advanced-usage)
     - [Subdomain Proxy](#subdomain-proxy)
     - [Deploying on `fly.io`](#deploying-on-flyio)
+  - [Environment Variables](#environment-variables)
+    - [Server](#server-2)
+    - [Client](#client-2)
   - [Trubleshooting](#trubleshooting)
   - [Contributing](#contributing)
   - [License](#license)
@@ -266,6 +269,33 @@ primary_region = "hkg"
     port = 9000
 ```
 This can view `xxxx.fly.dev:9000` and then view your own internal server.
+
+## Environment Variables
+
+Gnar uses Viper to manage configuration, which allows for setting options via environment variables. The following environment variables are supported:
+
+### Server
+
+- `GNAR_PORT`: Server port
+- `GNAR_ADMIN_PORT`: Admin server port
+- `GNAR_DOMAIN_TUNNEL`: Enable domain tunnel (true/false)
+- `GNAR_DOMAIN`: Domain name
+- `GNAR_TOKEN`: Authentication token
+- `GNAR_MULTIPLEX`: Enable connection multiplexing (true/false)
+
+### Client
+
+- `GNAR_TOKEN`: Authentication token
+- `GNAR_MULTIPLEX`: Enable connection multiplexing (true/false)
+
+Environment variables take precedence over configuration files and command-line flags. To use an environment variable, prefix the uppercase option name with `GNAR_`. For example, to set the server port:
+
+```bash
+export GNAR_PORT=8080
+gnar server
+```
+
+This will start the server on port 8080, regardless of the default value or any value specified in a configuration file.
 
 ## Trubleshooting
 

@@ -83,7 +83,10 @@ func (f *Proxyer) cancel() {
 }
 
 func (c *Client) Run() error {
-	logger.Info("Press Ctrl+C to shutdown")
+	if len(c.cfg.Proxys) == 0 {
+		logger.Error("No proxy config found, please check your config")
+		return nil
+	}
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
@@ -96,7 +99,7 @@ func (c *Client) Run() error {
 			proxyer.cancel()
 		})
 	}
-
+	logger.Info("Press Ctrl+C to shutdown")
 	logger.Infof("Receive signal %s to shutdown", <-sc)
 
 	for _, cancelFn := range cancelFns {

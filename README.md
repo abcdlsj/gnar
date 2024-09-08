@@ -6,11 +6,16 @@
   - [Quick Start](#quick-start)
   - [Configuration](#configuration)
     - [Command line flags](#command-line-flags)
-    - [Client](#client)
-    - [Server](#server)
-  - [Advanced Usage](#advanced-usage)
-    - [Subdomain Proxy](#subdomain-proxy)
-    - [Deploying on `fly.io`](#deploying-on-flyio)
+      - [Server](#server)
+      - [Client](#client)
+    - [Configuration Files](#configuration-files)
+      - [Client Configuration (client\_config.toml)](#client-configuration-client_configtoml)
+      - [Server Configuration (server\_config.toml)](#server-configuration-server_configtoml)
+    - [Positional Arguments](#positional-arguments)
+      - [Server](#server-1)
+      - [Client](#client-1)
+  - [Examples](#examples)
+    - [Client Configuration File Example](#client-configuration-file-example)
   - [Trubleshooting](#trubleshooting)
   - [Contributing](#contributing)
   - [License](#license)
@@ -48,21 +53,43 @@ make
 ## Quick Start
 
 1. Start the server:
+   with positional argument:
+   ```bash
+   gnar server 8910
+   ```
+
+   with flag:
    ```bash
    gnar server -p 8910
    ```
 
-2. Start a sample service:
+   Or using a configuration file:
+   ```bash
+   gnar server -c server_config.toml
+   ```
+
+2. Start the client:
+   with positional argument:
+   ```bash
+   gnar client localhost:8910 3000:9001
+   ```
+
+   with flag:
+   ```bash
+   gnar client -s localhost:8910 -p 3000:9001
+   ```
+
+   Or using a configuration file:
+   ```bash
+   gnar client -c client_config.toml
+   ```
+
+3. Start a sample service:
    ```bash
    python3 -m http.server 3000
    ```
 
-3. Start the client proxy:
-   ```bash
-   gnar client -s localhost:8910 -l 3000 -u 9001
-   ```
-
-4. Access your service at `host:9001`
+4. Access your service at `localhost:9001`
 
 ## Configuration
 
@@ -70,48 +97,134 @@ Gnar supports both command-line flags and configuration files. Here's a sample c
 
 ### Command line flags
 
+#### Server
+
 ```
-gnar is a proxy tool.
+Run gnar server with optional port argument
 
 Usage:
-  gnar [flags]
-  gnar [command]
-
-Available Commands:
-  client      
-  completion  Generate the autocompletion script for the specified shell
-  help        Help about any command
-  server      
+  gnar server [port] [flags]
 
 Flags:
-  -h, --help      help for gnar
-  -v, --version   version for gnar
-
-Use "gnar [command] --help" for more information about a command.
+  -a, --admin-port int   admin server port
+  -c, --config string    config file
+  -D, --domain string    domain name
+  -d, --domain-tunnel    enable domain tunnel
+  -h, --help             help for server
+  -m, --multiplex        multiplex client/server control connection
+  -p, --port int         server port (default 8910)
+  -t, --token string     token
 ```
 
-### Client
+#### Client
 
-Command line flags:
-```shell
+```
+Run gnar client with optional server address and port mapping
+
 Usage:
-  gnar client [flags]
+  gnar client [server-addr] [local-port:remote-port] [flags]
 
 Flags:
   -c, --config string        config file
   -h, --help                 help for client
-  -l, --local-port int       local port
   -m, --multiplex            multiplex client/server control connection
   -n, --proxy-name string    proxy name
   -y, --proxy-type string    proxy transport protocol type (default "tcp")
-  -u, --remote-port int      proxy port
   -s, --server-addr string   server addr (default "localhost:8910")
       --speed-limit string   speed limit
   -d, --subdomain string     subdomain
   -t, --token string         token
 ```
 
-Toml config:
+### Configuration Files
+
+#### Client Configuration (client_config.toml)
+
+```toml
+server-addr = "localhost:8910"
+token = "abcdlsj" # optional
+multiplex = true # optional, if true will use yamux to multiplex the connection
+
+[[proxys]]
+proxy-name = "python_http_file_service" # optional
+subdomain = "python3-http" # optional, if not set, will generate a random subdomain prefix
+local-port = 3000
+remote-port = 9001
+speed-limit = "100kb" # optional, if not set, will not limit speed
+proxy-type = "tcp"
+
+[[proxys]]
+local-port = 3001
+remote-port = 9002
+proxy-type = "tcp"
+```
+
+#### Server Configuration (server_config.toml)
+
+```toml
+port = 8910
+admin-port = 8911
+domain-tunnel = false
+domain = "example.com"
+# token = "abcdlsj" # optional
+multiplex = false
+```
+
+### Positional Arguments
+
+#### Server
+
+The server command accepts an optional port number as a positional argument:
+
+```bash
+gnar server [port]
+```
+
+If not provided, the default port (8910) or the port specified in the configuration file will be used.
+
+#### Client
+
+The client command accepts two optional positional arguments:
+
+```bash
+gnar client [server-addr] [local-port:remote-port]
+```
+
+1. `server-addr`: The address of the gnar server (e.g., "localhost:8910")
+2. `local-port:remote-port`: The local and remote port mapping (e.g., "3000:9001")
+
+If these arguments are not provided, the values from the configuration file or default values will be used.
+
+## Examples
+
+1. Start the server on port 8080:
+   ```bash
+   gnar server 8080
+   ```
+
+2. Start the client connecting to a server at example.com:8910 and mapping local port 3000 to remote port 9001:
+   ```bash
+   gnar client example.com:8910 3000:9001
+   ```
+
+3. Start the server using a configuration file:
+   ```bash
+   gnar server -c server_config.toml
+   ```
+
+4. Start the client using a configuration file:
+   ```bash
+   gnar client -c client_config.toml
+   ```
+
+5. Start the client with multiple proxy configurations:
+   ```bash
+   gnar client -c client_config.toml
+   ```
+   (Use the configuration file to define multiple proxy settings)
+
+### Client Configuration File Example
+
 ```toml
 server-addr = "localhost:8910"
 token = "abcdlsj" # optional
@@ -131,107 +244,7 @@ remote-port = 9002
 proxy-type = "tcp"
 ```
 
-### Server
-
-Command line flags:
-```shell
-Usage:
-  gnar server [flags]
-
-Flags:
-  -a, --admin-port int   admin server port
-  -c, --config string    config file
-  -D, --domain string    domain name
-  -d, --domain-tunnel    enable domain tunnel
-  -h, --help             help for server
-  -m, --multiplex        multiplex client/server control connection
-  -p, --port int         server port (default 8910)
-  -t, --token string     token
-```
-
-Toml config:
-```toml
-port = 8910
-admin-port = 8911
-domain-tunnel = false
-domain = "example.com"
-# token = "abcdlsj" # optional
-```
-
-Server admin panel:
-
-![server admin screenshot](assets/server_admin_screenshot.png)
-
-## Advanced Usage
-
-### Subdomain Proxy
-
-1. Set up your domain's DNS records:
-   ```
-   A *.example.com <your server ip>
-   A example.com <your server ip>
-   ```
-
-2. Start the Caddy server:
-   ```bash
-   caddy run --config <gnar path>/server/caddy.json
-   ```
-
-3. Run the Gnar server with domain tunnel enabled:
-   ```bash
-   gnar server -a 8911 -D example.com -d -p 8910
-   ```
-
-4. Start the client with a custom subdomain:
-   ```bash
-   gnar client -s localhost:8910 -l 3000 -u 9001 -d myapp
-   ```
-
-### Deploying on `fly.io`
-
-Gnar can be easily deployed on <https://fly.io>.
-
-You can edit `entrypoint.sh` to start your own server **you need to special set forward port.**
-
-Example:
-```toml
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-app = "xxxx"
-primary_region = "hkg"
-
-[build]
-
-# Control
-[[services]]
-  internal_port = 8910
-  protocol = "tcp"
-
-  [[services.ports]]
-    port = 8910
-  
-# Admin
-[[services]]
-  internal_port = 8911
-  protocol = "tcp"
-
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-# Forward TCP
-[[services]]
-  internal_port = 9000
-  protocol = "tcp"
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 9000
-```
-This can view `xxxx.fly.dev:9000` and then view your own internal server.
+These examples demonstrate how to use both command-line arguments and configuration files to start the gnar server and client with various options.
 
 ## Trubleshooting
 

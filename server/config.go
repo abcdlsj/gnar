@@ -39,16 +39,16 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 		}
 	}
 
+	if err := viper.Unmarshal(&config); err != nil {
+		return config, fmt.Errorf("error unmarshaling config: %v", err)
+	}
+
 	if len(args) > 0 {
 		port, err := strconv.Atoi(args[0])
 		if err != nil {
 			return config, fmt.Errorf("invalid port number: %v", err)
 		}
 		config.Port = port
-	}
-
-	if err := viper.Unmarshal(&config); err != nil {
-		return config, fmt.Errorf("error unmarshaling config: %v", err)
 	}
 
 	return config, nil

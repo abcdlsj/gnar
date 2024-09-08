@@ -41,6 +41,10 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 		}
 	}
 
+	if err := viper.Unmarshal(&config); err != nil {
+		return config, fmt.Errorf("error unmarshaling config: %v", err)
+	}
+
 	if len(args) > 0 {
 		config.SvrAddr = args[0]
 	}
@@ -50,10 +54,6 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 			return config, err
 		}
 		config.Proxys = []Proxy{proxy}
-	}
-
-	if err := viper.Unmarshal(&config); err != nil {
-		return config, fmt.Errorf("error unmarshaling config: %v", err)
 	}
 
 	return config, nil

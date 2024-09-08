@@ -14,6 +14,7 @@ type Config struct {
 	Domain       string `mapstructure:"domain"`
 	Token        string `mapstructure:"token"`
 	Multiplex    bool   `mapstructure:"multiplex"`
+	CaddySrvName string `mapstructure:"caddy-srv-name"`
 }
 
 func LoadConfig(cfgFile string, args []string) (config Config, err error) {
@@ -30,6 +31,7 @@ func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 	viper.BindEnv("domain")
 	viper.BindEnv("token")
 	viper.BindEnv("multiplex")
+	viper.BindEnv("caddy-srv-name")
 
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)

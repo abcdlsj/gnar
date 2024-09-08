@@ -110,14 +110,15 @@ Usage:
   gnar server [port] [flags]
 
 Flags:
-  -a, --admin-port int   admin server port
-  -c, --config string    config file
-  -D, --domain string    domain name
-  -d, --domain-tunnel    enable domain tunnel
-  -h, --help             help for server
-  -m, --multiplex        multiplex client/server control connection
-  -p, --port int         server port (default 8910)
-  -t, --token string     token
+  -a, --admin-port int          admin server port
+  -s, --caddy-srv-name string   caddy server name (default "srv0")
+  -c, --config string           config file
+  -D, --domain string           domain name
+  -d, --domain-tunnel           enable domain tunnel
+  -h, --help                    help for server
+  -m, --multiplex               multiplex client/server control connection
+  -p, --port int                server port (default 8910)
+  -t, --token string            token
 ```
 
 #### Client
@@ -212,7 +213,7 @@ If these arguments are not provided, the values from the configuration file or d
    A example.com <your server ip>
    ```
 
-2. Start the Caddy server:
+2. Start the Caddy server(or if you have running caddy, you can skip this step):
    ```bash
    caddy run --config <gnar path>/server/caddy.json
    ```
@@ -221,6 +222,10 @@ If these arguments are not provided, the values from the configuration file or d
    ```bash
    gnar server 8910 -D example.com -d
    ```
+
+   can use `-s` to set caddy server name（default should be `srv0`）.
+   gnar will use this name to create add new route.
+   if you use `Caddyfile` to config caddy, you can use `sudo caddy adapt --config /etc/caddy/Caddyfile` to generate caddy.json.
 
 4. Start the client with a custom subdomain:
    ```bash

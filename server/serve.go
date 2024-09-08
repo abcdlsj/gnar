@@ -31,14 +31,16 @@ type resourceManager struct {
 	proxys        []Proxy
 	portManager   map[int]bool
 	domainManager map[string]bool
+	caddySrvName  string
 	m             sync.RWMutex
 }
 
-func newResourceManager() *resourceManager {
+func newResourceManager(cfg Config) *resourceManager {
 	return &resourceManager{
 		proxys:        []Proxy{},
 		portManager:   make(map[int]bool),
 		domainManager: make(map[string]bool),
+		caddySrvName:  cfg.CaddySrvName,
 	}
 }
 
@@ -48,7 +50,7 @@ func newServer(cfg Config) *Server {
 		tcpConnMap:    conn.NewTCPConnMap(),
 		udpConnMap:    conn.NewUDPConnMap(),
 		authenticator: &auth.Nop{},
-		resources:     newResourceManager(),
+		resources:     newResourceManager(cfg),
 	}
 
 	if s.cfg.Token != "" {
@@ -291,13 +293,13 @@ func (rm *resourceManager) distrDomain(sub string, cfg Config, uPort int) (strin
 	}
 
 	if sub == "" {
-		sub = uuid.NewString()[:10]
+		sub = uuid.NewString()[:8]
 	}
 
 	domain := fmt.Sprintf("%s.%s", sub, cfg.Domain)
 
 	if !rm.domainManager[domain] {
-		if err := addCaddyRouter(domain, uPort); err != nil {
+		if err := addCaddyRouter(rm.caddySrvName, domain, uPort); err != nil {
 			return "", err
 		}
 		return domain, nil

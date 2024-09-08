@@ -11,7 +11,7 @@ import (
 
 var (
 	caddyAddRouteF         = "{\"@id\":\"%s\",\"match\":[{\"host\":[\"%s\"]}],\"handle\":[{\"handler\":\"reverse_proxy\",\"upstreams\":[{\"dial\":\":%d\"}]}]}"
-	caddyAddRouteUrl       = "http://127.0.0.1:2019/config/apps/http/servers/gnar/routes"
+	caddyAddRouteUrl       = "http://127.0.0.1:2019/config/apps/http/servers/%s/routes"
 	caddyAddTlsSubjectsUrl = "http://127.0.0.1:2019/config/apps/tls/automation/policies/0/subjects"
 )
 
@@ -19,9 +19,9 @@ func newHttpClient() *http.Client {
 	return &http.Client{}
 }
 
-func addCaddyRouter(host string, port int) error {
+func addCaddyRouter(srvName, host string, port int) error {
 	tunnelId := fmt.Sprintf("%s.%d", host, port)
-	resp, err := http.Post(caddyAddRouteUrl, "application/json", bytes.NewBuffer([]byte(fmt.Sprintf(caddyAddRouteF, tunnelId, host, port))))
+	resp, err := http.Post(fmt.Sprintf(caddyAddRouteUrl, srvName), "application/json", bytes.NewBuffer([]byte(fmt.Sprintf(caddyAddRouteF, tunnelId, host, port))))
 	if err != nil {
 		logger.Errorf("Tunnel creation failed, err: %v", err)
 		return err

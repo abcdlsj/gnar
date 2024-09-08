@@ -30,7 +30,7 @@ func (s *Server) startAdmin() {
 
 	http.HandleFunc("/admin/tunnel/close", func(w http.ResponseWriter, r *http.Request) {
 		type Req struct {
-			Port int `json:"port"` // 更改 To 为 Port
+			Port int `json:"port"`
 		}
 
 		var msg = "Close tunnel success"

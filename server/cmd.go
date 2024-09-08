@@ -32,6 +32,7 @@ func Command() *cobra.Command {
 	cmd.PersistentFlags().StringP("domain", "D", "", "domain name")
 	cmd.PersistentFlags().StringP("token", "t", "", "token")
 	cmd.PersistentFlags().BoolP("multiplex", "m", false, "multiplex client/server control connection")
+	cmd.PersistentFlags().StringP("caddy-srv-name", "s", "srv0", "caddy server name")
 
 	viper.BindPFlags(cmd.PersistentFlags())
 

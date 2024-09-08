@@ -14,8 +14,6 @@
     - [Positional Arguments](#positional-arguments)
       - [Server](#server-1)
       - [Client](#client-1)
-  - [Examples](#examples)
-    - [Client Configuration File Example](#client-configuration-file-example)
   - [Advanced Usage](#advanced-usage)
     - [Subdomain Proxy](#subdomain-proxy)
     - [Deploying on `fly.io`](#deploying-on-flyio)
@@ -197,57 +195,6 @@ gnar client [server-addr] [local-port:remote-port]
 2. `local-port:remote-port`: The local and remote port mapping (e.g., "3000:9001")
 
 If these arguments are not provided, the values from the configuration file or default values will be used.
-
-## Examples
-
-1. Start the server on port 8080:
-   ```bash
-   gnar server 8080
-   ```
-
-2. Start the client connecting to a server at example.com:8910 and mapping local port 3000 to remote port 9001:
-   ```bash
-   gnar client example.com:8910 3000:9001
-   ```
-
-3. Start the server using a configuration file:
-   ```bash
-   gnar server -c server_config.toml
-   ```
-
-4. Start the client using a configuration file:
-   ```bash
-   gnar client -c client_config.toml
-   ```
-
-5. Start the client with multiple proxy configurations:
-   ```bash
-   gnar client -c client_config.toml
-   ```
-   (Use the configuration file to define multiple proxy settings)
-
-### Client Configuration File Example
-
-```toml
-server-addr = "localhost:8910"
-token = "abcdlsj" # optional
-multiplex = true // optional, if true will use yamux to multiplex the connection
-
-[[proxys]]
-proxy-name = "python_http_file_service" # optional
-subdomain = "python3-http" # optional, if not, will generate a random subdomain prefix
-local-port = 3000
-remote-port = 9001
-speed-limit = "100kb" // optional, if not, will not limit speed
-proxy-type = "tcp"
-
-[[proxys]]
-local-port = 3001
-remote-port = 9002
-proxy-type = "tcp"
-```
-
-These examples demonstrate how to use both command-line arguments and configuration files to start the gnar server and client with various options.
 
 ## Advanced Usage
 

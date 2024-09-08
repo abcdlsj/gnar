@@ -207,6 +207,9 @@ If these arguments are not provided, the values from the configuration file or d
 
 ### Subdomain Proxy
 
+> [!WARNING]
+> This need you have the base knowledge of caddy and caddy plugin.
+
 1. Set up your domain's DNS records:
    ```
    A *.example.com <your server ip>
@@ -223,8 +226,10 @@ If these arguments are not provided, the values from the configuration file or d
    gnar server 8910 -D example.com -d
    ```
 
-   can use `-s` to set caddy server name（default should be `srv0`）.
+   can use `-s` to set caddy server name(default should be `srv0`).
+
    gnar will use this name to create add new route.
+   
    if you use `Caddyfile` to config caddy, you can use `sudo caddy adapt --config /etc/caddy/Caddyfile` to generate caddy.json.
 
 4. Start the client with a custom subdomain:

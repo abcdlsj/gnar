@@ -1,7 +1,8 @@
 package client
 
 import (
-	"github.com/abcdlsj/gnar/logger"
+	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -14,13 +15,13 @@ func Command() *cobra.Command {
 		Short: "Run gnar client",
 		Long:  "Run gnar client with optional server address and port mapping",
 		Args:  cobra.MaximumNArgs(2),
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := LoadConfig(cfgFile, args)
 			if err != nil {
-				logger.Fatalf("Error loading config: %v", err)
+				return fmt.Errorf("error loading config: %v", err)
 			}
 
-			newClient(cfg).Run()
+			return newClient(cfg).Run()
 		},
 	}
 

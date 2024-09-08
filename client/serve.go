@@ -82,7 +82,7 @@ func (f *Proxyer) cancel() {
 	logger.Infof("Close connection to server, local port: %d, remote port: %d", f.localPort, f.remotePort)
 }
 
-func (c *Client) Run() {
+func (c *Client) Run() error {
 	logger.Info("Press Ctrl+C to shutdown")
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
@@ -104,6 +104,7 @@ func (c *Client) Run() {
 	}
 
 	logger.Info("Shutdown success")
+	return nil
 }
 
 func (f *Proxyer) Run() {

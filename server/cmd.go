@@ -1,7 +1,8 @@
 package server
 
 import (
-	"github.com/abcdlsj/gnar/logger"
+	"fmt"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -14,13 +15,13 @@ func Command() *cobra.Command {
 		Short: "Run gnar server",
 		Long:  "Run gnar server with optional port argument",
 		Args:  cobra.MaximumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := LoadConfig(cfgFile, args)
 			if err != nil {
-				logger.Fatalf("Error loading config: %v", err)
+				return fmt.Errorf("error loading config: %v", err)
 			}
 
-			newServer(cfg).Run()
+			return newServer(cfg).Run()
 		},
 	}
 

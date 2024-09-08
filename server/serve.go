@@ -58,9 +58,10 @@ func newServer(cfg Config) *Server {
 	return s
 }
 
-func (s *Server) Run() {
+func (s *Server) Run() error {
 	s.startAdminServer()
 	s.startProxyServer()
+	return nil
 }
 
 func (s *Server) startAdminServer() {

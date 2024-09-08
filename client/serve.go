@@ -14,6 +14,7 @@ import (
 	"github.com/abcdlsj/gnar/client/tunnel"
 	"github.com/abcdlsj/gnar/logger"
 	"github.com/abcdlsj/gnar/proto"
+	"github.com/abcdlsj/gnar/terminal"
 )
 
 type Client struct {
@@ -188,7 +189,7 @@ func (f *Proxyer) mustNewProxy(rConn net.Conn) {
 	}
 
 	if pxyResp.Domain != "" {
-		f.logger.Infof("Proxy create success, domain: %s", pxyResp.Domain)
+		f.logger.Infof("Proxy create success, domain: %s", terminal.CreateProxyLink(pxyResp.Domain))
 	} else {
 		f.logger.Info("Proxy create success!")
 	}

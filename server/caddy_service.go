@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/abcdlsj/cr"
 	"github.com/abcdlsj/gnar/logger"
+	"github.com/abcdlsj/gnar/terminal"
 )
 
 var (
@@ -34,7 +34,7 @@ func addCaddyRouter(srvName, host string, port int) error {
 		return err
 	}
 	defer resp.Body.Close()
-	logger.Infof("Tunnel created successfully, id: %s, host: %s", tunnelId, cr.PWhiteUnderline(host))
+	logger.Infof("Tunnel created successfully, id: %s, host: %s", tunnelId, terminal.CreateProxyLink(host))
 	return nil
 }
 

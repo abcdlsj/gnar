@@ -16,6 +16,8 @@ func Command() *cobra.Command {
 		Long:  "Run gnar client with optional server address and port mapping",
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			viper.BindPFlags(cmd.PersistentFlags())
+
 			cfg, err := LoadConfig(cfgFile, args)
 			if err != nil {
 				return fmt.Errorf("error loading config: %v", err)
@@ -33,8 +35,6 @@ func Command() *cobra.Command {
 	cmd.PersistentFlags().StringP("proxy-name", "n", "", "proxy name")
 	cmd.PersistentFlags().StringP("proxy-type", "y", "tcp", "proxy transport protocol type")
 	cmd.PersistentFlags().StringP("speed-limit", "", "", "speed limit")
-
-	viper.BindPFlags(cmd.PersistentFlags())
 
 	return cmd
 }

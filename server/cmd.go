@@ -16,6 +16,8 @@ func Command() *cobra.Command {
 		Long:  "Run gnar server with optional port argument",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			viper.BindPFlags(cmd.PersistentFlags())
+
 			cfg, err := LoadConfig(cfgFile, args)
 			if err != nil {
 				return fmt.Errorf("error loading config: %v", err)
@@ -33,8 +35,6 @@ func Command() *cobra.Command {
 	cmd.PersistentFlags().StringP("token", "t", "", "token")
 	cmd.PersistentFlags().BoolP("multiplex", "m", false, "multiplex client/server control connection")
 	cmd.PersistentFlags().StringP("caddy-srv-name", "s", "srv0", "caddy server name")
-
-	viper.BindPFlags(cmd.PersistentFlags())
 
 	return cmd
 }

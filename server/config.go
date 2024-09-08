@@ -19,9 +19,10 @@ type Config struct {
 
 func LoadConfig(cfgFile string, args []string) (config Config, err error) {
 	viper.SetDefault("port", 8910)
-	// viper.SetDefault("admin-port", 8911) // default 0, disabled
+	viper.SetDefault("admin-port", 0)
 	viper.SetDefault("domain-tunnel", false)
 	viper.SetDefault("multiplex", false)
+	viper.SetDefault("caddy-srv-name", "srv0")
 
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("GNAR")

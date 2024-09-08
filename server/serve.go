@@ -75,6 +75,7 @@ func (s *Server) printMetaInfo() {
 	fmt.Printf("Admin Port: %d\n", s.cfg.AdminPort)
 	fmt.Printf("Domain Tunnel: %v\n", s.cfg.DomainTunnel)
 	fmt.Printf("Domain: %s\n", s.cfg.Domain)
+	fmt.Printf("Token: %s\n", s.cfg.Token)
 	fmt.Printf("Token Authentication: %v\n", s.cfg.Token != "")
 	fmt.Printf("Multiplex: %v\n", s.cfg.Multiplex)
 	fmt.Printf("Caddy Server Name: %s\n", s.cfg.CaddySrvName)

@@ -16,6 +16,9 @@
       - [Client](#client-1)
   - [Examples](#examples)
     - [Client Configuration File Example](#client-configuration-file-example)
+  - [Advanced Usage](#advanced-usage)
+    - [Subdomain Proxy](#subdomain-proxy)
+    - [Deploying on `fly.io`](#deploying-on-flyio)
   - [Trubleshooting](#trubleshooting)
   - [Contributing](#contributing)
   - [License](#license)
@@ -245,6 +248,77 @@ proxy-type = "tcp"
 ```
 
 These examples demonstrate how to use both command-line arguments and configuration files to start the gnar server and client with various options.
+
+## Advanced Usage
+
+### Subdomain Proxy
+
+1. Set up your domain's DNS records:
+   ```
+   A *.example.com <your server ip>
+   A example.com <your server ip>
+   ```
+
+2. Start the Caddy server:
+   ```bash
+   caddy run --config <gnar path>/server/caddy.json
+   ```
+
+3. Run the Gnar server with domain tunnel enabled:
+   ```bash
+   gnar server 8910 -D example.com -d
+   ```
+
+4. Start the client with a custom subdomain:
+   ```bash
+   gnar client localhost:8910 3000:9001 -d myapp
+   ```
+
+### Deploying on `fly.io`
+
+Gnar can be easily deployed on <https://fly.io>.
+
+You can edit `entrypoint.sh` to start your own server **you need to special set forward port.**
+
+Example:
+```toml
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+app = "xxxx"
+primary_region = "hkg"
+
+[build]
+
+# Control
+[[services]]
+  internal_port = 8910
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 8910
+  
+# Admin
+[[services]]
+  internal_port = 8911
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+# Forward TCP
+[[services]]
+  internal_port = 9000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 9000
+```
+This can view `xxxx.fly.dev:9000` and then view your own internal server.
 
 ## Trubleshooting
 

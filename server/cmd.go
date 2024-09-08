@@ -10,25 +10,14 @@ func Command() *cobra.Command {
 	var cfgFile string
 
 	cmd := &cobra.Command{
-		Use: "server",
+		Use:   "server [port]",
+		Short: "Run gnar server",
+		Long:  "Run gnar server with optional port argument",
+		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			var cfg Config
-			var err error
-
-			if cfgFile != "" {
-				cfg, err = LoadConfig(cfgFile)
-				if err != nil {
-					logger.Fatalf("Error loading config file: %v", err)
-				}
-			} else {
-				cfg = Config{
-					Port:         viper.GetInt("port"),
-					AdminPort:    viper.GetInt("admin-port"),
-					DomainTunnel: viper.GetBool("domain-tunnel"),
-					Domain:       viper.GetString("domain"),
-					Token:        viper.GetString("token"),
-					Multiplex:    viper.GetBool("multiplex"),
-				}
+			cfg, err := LoadConfig(cfgFile, args)
+			if err != nil {
+				logger.Fatalf("Error loading config: %v", err)
 			}
 
 			newServer(cfg).Run()

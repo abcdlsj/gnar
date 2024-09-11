@@ -22,6 +22,7 @@
     - [Client](#client-2)
   - [Trubleshooting](#trubleshooting)
   - [Contributing](#contributing)
+  - [Credits](#credits)
   - [License](#license)
 
 <!-- TOC end -->
@@ -326,6 +327,12 @@ This will start the server on port 8080, regardless of the default value or any 
 ## Contributing
 
 We welcome contributions to Gnar! Please read our [Contributing Guidelines](CONTRIBUTING.md) for more information on how to get started.
+
+## Credits
+
+Thanks to [JetBrains](https://www.jetbrains.com/) for providing free licenses to support this project.
+
+[![JetBrains Logo](https://resources.jetbrains.com/storage/products/company/brand/logos/jb_beam.svg)](https://jb.gg/OpenSourceSupport)
 
 ## License
 

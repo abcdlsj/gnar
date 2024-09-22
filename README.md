@@ -31,7 +31,7 @@
 # Gnar
 A Versatile Proxy Tool with Auto-HTTPS Subdomain Support.
 
-![run gif](assets/run.gif)
+![run gif](assets/gnar.gif)
 
 Gnar is a powerful and flexible __proxy__ tool, similar to frp, with built-in support for __Auto-HTTPS__ subdomain proxying. It's designed to be simple yet feature-rich, making it an ideal solution for developers who need a reliable and secure proxy setup.
 

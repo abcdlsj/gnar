@@ -16,5 +16,5 @@ func CreateProxyLink(domain string) string {
 	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
 		url = "https://" + url
 	}
-	return CreateClickableLink(url, domain)
+	return CreateClickableLink(url, url)
 }

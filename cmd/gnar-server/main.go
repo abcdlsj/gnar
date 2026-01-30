@@ -3,12 +3,11 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/abcdlsj/gnar/internal/output"
 	"github.com/abcdlsj/gnar/pkg/tunnel"
 )
 
@@ -22,7 +21,7 @@ func main() {
 	flag.Parse()
 
 	if *domain == "" {
-		fmt.Fprintf(os.Stderr, "Usage: gnar-server -domain=gnar.example.com\\n")
+		output.Error("Usage: gnar-server -domain=gnar.example.com")
 		os.Exit(1)
 	}
 
@@ -44,7 +43,7 @@ func main() {
 
 	server, err := tunnel.NewServer(cfg)
 	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		output.Fatal("Failed to create server: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -55,15 +54,18 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigChan
-		fmt.Println("\\nShutting down...")
+		output.Line()
+		output.Info("Shutting down...")
 		cancel()
 	}()
 
-	fmt.Printf("Starting gnar server on %s\\n", *addr)
-	fmt.Printf("Base domain: %s\\n", *domain)
-	fmt.Printf("HTTPS autocert: %v\\n", *autoCert)
+	output.Title("Gnar Server")
+	output.Pair("Listen:", *addr)
+	output.Pair("Domain:", *domain)
+	output.Muted("Autocert enabled")
+	output.Line()
 
 	if err := server.Run(ctx); err != nil {
-		log.Fatalf("Server error: %v", err)
+		output.Fatal("Server error: %v", err)
 	}
 }

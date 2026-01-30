@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"sync"
 	"time"
 )
 
@@ -81,4 +82,49 @@ type TrafficStatsEvent struct {
 	BytesSent   int64
 	BytesRecv   int64
 	Connections int
+}
+
+// eventEmitter manages event handlers and event emission.
+type eventEmitter struct {
+	handlers map[EventType][]EventHandler
+	mu       sync.RWMutex
+}
+
+// newEventEmitter creates a new event emitter.
+func newEventEmitter() *eventEmitter {
+	return &eventEmitter{
+		handlers: make(map[EventType][]EventHandler),
+	}
+}
+
+// on registers an event handler.
+func (e *eventEmitter) on(eventType EventType, handler EventHandler) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.handlers[eventType] = append(e.handlers[eventType], handler)
+}
+
+// off unregisters an event handler.
+func (e *eventEmitter) off(eventType EventType, handler EventHandler) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	handlers := e.handlers[eventType]
+	for i, h := range handlers {
+		if &h == &handler {
+			e.handlers[eventType] = append(handlers[:i], handlers[i+1:]...)
+			return
+		}
+	}
+}
+
+// emit emits an event to all registered handlers.
+func (e *eventEmitter) emit(event Event) {
+	e.mu.RLock()
+	handlers := e.handlers[event.Type()]
+	e.mu.RUnlock()
+
+	for _, handler := range handlers {
+		go handler(event)
+	}
 }

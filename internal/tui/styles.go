@@ -8,12 +8,12 @@ import (
 // Color scheme - no icons, just colors.
 var (
 	// Primary colors
-	primary   = lipgloss.Color("#7C3AED") // Purple
-	secondary = lipgloss.Color("#2563EB") // Blue
-	success   = lipgloss.Color("#059669") // Green
-	warning   = lipgloss.Color("#D97706") // Amber
-	error     = lipgloss.Color("#DC2626") // Red
-	info      = lipgloss.Color("#0891B2") // Cyan
+	primary    = lipgloss.Color("#7C3AED") // Purple
+	secondary  = lipgloss.Color("#2563EB") // Blue
+	success    = lipgloss.Color("#059669") // Green
+	warning    = lipgloss.Color("#D97706") // Amber
+	errorColor = lipgloss.Color("#DC2626") // Red
+	info       = lipgloss.Color("#0891B2") // Cyan
 
 	// Neutral colors
 	muted = lipgloss.Color("#6B7280") // Gray
@@ -45,7 +45,7 @@ var (
 
 	// Error text
 	ErrorStyle = lipgloss.NewStyle().
-			Foreground(error).
+			Foreground(errorColor).
 			Bold(true)
 
 	// Warning text
@@ -102,7 +102,7 @@ var (
 
 	ErrorBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(error).
+			BorderForeground(errorColor).
 			Padding(1, 2)
 )
 

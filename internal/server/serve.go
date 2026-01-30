@@ -13,8 +13,10 @@ import (
 	"github.com/abcdlsj/gnar/internal/logger"
 	"github.com/abcdlsj/gnar/internal/proxy"
 	"github.com/abcdlsj/gnar/internal/server/conn"
+	"github.com/abcdlsj/gnar/internal/tui"
 	"github.com/abcdlsj/gnar/pkg/proto"
 	"github.com/abcdlsj/gnar/pkg/share"
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/google/uuid"
 	"github.com/hashicorp/yamux"
 )
@@ -61,25 +63,60 @@ func newServer(cfg Config) *Server {
 }
 
 func (s *Server) Run() error {
-	s.printMetaInfo()
+	logWriter := tui.NewLogWriter()
+	logger.SetGlobalWriter(logWriter)
+
+	header := s.headerString()
+	provider := &serverStatusProvider{rm: s.resources}
+
 	s.startAdminServer()
-	s.startProxyServer()
-	return nil
+	go s.startProxyServer()
+
+	return tui.Run(header, provider, logWriter, nil)
 }
 
-func (s *Server) printMetaInfo() {
-	fmt.Println("---")
-	fmt.Println("Gnar Server")
-	fmt.Printf("Version: %s\n", share.GetVersion())
-	fmt.Printf("Port: %d\n", s.cfg.Port)
-	fmt.Printf("Admin Port: %d\n", s.cfg.AdminPort)
-	fmt.Printf("Domain Tunnel: %v\n", s.cfg.DomainTunnel)
-	fmt.Printf("Domain: %s\n", s.cfg.Domain)
-	fmt.Printf("Token: %s\n", s.cfg.Token)
-	fmt.Printf("Token Authentication: %v\n", s.cfg.Token != "")
-	fmt.Printf("Multiplex: %v\n", s.cfg.Multiplex)
-	fmt.Printf("Caddy Server Name: %s\n", s.cfg.CaddySrvName)
-	fmt.Println("---")
+func (s *Server) headerString() string {
+	tokenStr := "off"
+	if s.cfg.Token != "" {
+		tokenStr = "on"
+	}
+	muxStr := "off"
+	if s.cfg.Multiplex {
+		muxStr = "on"
+	}
+	return fmt.Sprintf("Gnar Server %s\nPort: %d | Admin: %d | Token: %s | Mux: %s\nDomain: %s | Tunnel: %v",
+		share.GetVersion(), s.cfg.Port, s.cfg.AdminPort, tokenStr, muxStr,
+		s.cfg.Domain, s.cfg.DomainTunnel)
+}
+
+type serverStatusProvider struct {
+	rm *resourceManager
+}
+
+func (p *serverStatusProvider) Columns() []table.Column {
+	return []table.Column{
+		{Title: "Port", Width: 8},
+		{Title: "From", Width: 24},
+		{Title: "Domain", Width: 30},
+	}
+}
+
+func (p *serverStatusProvider) Rows() []table.Row {
+	p.rm.m.RLock()
+	defer p.rm.m.RUnlock()
+	rows := make([]table.Row, len(p.rm.proxys))
+	for i, proxy := range p.rm.proxys {
+		domain := proxy.Domain
+		if domain == "" {
+			domain = "-"
+		}
+		rows[i] = table.Row{
+			fmt.Sprintf("%d", proxy.Port),
+			proxy.From,
+			domain,
+		}
+	}
+	return rows
 }
 
 func (s *Server) startAdminServer() {

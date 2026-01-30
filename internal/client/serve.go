@@ -4,18 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/abcdlsj/gnar/internal/client/control"
 	"github.com/abcdlsj/gnar/internal/client/tunnel"
 	"github.com/abcdlsj/gnar/internal/logger"
 	"github.com/abcdlsj/gnar/internal/terminal"
+	"github.com/abcdlsj/gnar/internal/tui"
 	"github.com/abcdlsj/gnar/pkg/proto"
 	"github.com/abcdlsj/gnar/pkg/share"
+	"github.com/charmbracelet/bubbles/table"
 )
 
 type Client struct {
@@ -85,32 +84,33 @@ func (f *Proxyer) cancel() {
 }
 
 func (c *Client) Run() error {
-	c.printMetaInfo()
 	if len(c.cfg.Proxys) == 0 {
 		logger.Error("No proxy config found, please check your config")
 		return nil
 	}
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, os.Interrupt, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	logWriter := tui.NewLogWriter()
+	logger.SetGlobalWriter(logWriter)
+
+	header := c.headerString()
+	provider := &clientStatusProvider{proxys: c.cfg.Proxys}
 
 	cancelFns := make([]func(), 0)
 	for _, proxy := range c.cfg.Proxys {
 		proxyer := newProxyer(c.cfg.SvrAddr, c.cfg.Token, c.cfg.Multiplex, proxy)
 		go proxyer.Run()
-
 		cancelFns = append(cancelFns, func() {
 			proxyer.cancel()
 		})
 	}
-	logger.Info("Press Ctrl+C to shutdown")
-	logger.Infof("Receive signal %s to shutdown", <-sc)
 
-	for _, cancelFn := range cancelFns {
-		cancelFn()
+	onQuit := func() {
+		for _, cancelFn := range cancelFns {
+			cancelFn()
+		}
 	}
 
-	logger.Info("Shutdown success")
-	return nil
+	return tui.Run(header, provider, logWriter, onQuit)
 }
 
 func (f *Proxyer) Run() {
@@ -197,32 +197,51 @@ func (f *Proxyer) mustNewProxy(rConn net.Conn) {
 	}
 }
 
-func (c *Client) printMetaInfo() {
-	fmt.Println("---")
-	fmt.Println("Gnar Client")
-	fmt.Printf("Version: %s\n", share.GetVersion())
-	fmt.Printf("Server Address: %s\n", c.cfg.SvrAddr)
-	fmt.Printf("Token Authentication: %v\n", c.cfg.Token != "")
-	fmt.Printf("Multiplex: %v\n", c.cfg.Multiplex)
-	fmt.Println("Proxies:")
-	for _, proxy := range c.cfg.Proxys {
-		name := proxy.ProxyName
-		if name == "" {
-			name = "<empty>"
-		}
-		fmt.Printf("  - Name: %s\n", name)
-		fmt.Printf("    Local Port: %d\n", proxy.LocalPort)
-		fmt.Printf("    Remote Port: %d\n", proxy.RemotePort)
-		fmt.Printf("    Type: %s\n", proxy.ProxyType)
-		fmt.Printf("    Subdomain: %s\n", getValueOrEmpty(proxy.Subdomain))
-		fmt.Printf("    Speed Limit: %s\n", getValueOrEmpty(proxy.SpeedLimit))
+func (c *Client) headerString() string {
+	tokenStr := "off"
+	if c.cfg.Token != "" {
+		tokenStr = "on"
 	}
-	fmt.Println("---")
+	muxStr := "off"
+	if c.cfg.Multiplex {
+		muxStr = "on"
+	}
+	return fmt.Sprintf("Gnar Client %s\nServer: %s | Token: %s | Mux: %s",
+		share.GetVersion(), c.cfg.SvrAddr, tokenStr, muxStr)
 }
 
-func getValueOrEmpty(s string) string {
-	if s == "" {
-		return "<empty>"
+type clientStatusProvider struct {
+	proxys []Proxy
+}
+
+func (p *clientStatusProvider) Columns() []table.Column {
+	return []table.Column{
+		{Title: "Name", Width: 12},
+		{Title: "Type", Width: 6},
+		{Title: "Local", Width: 8},
+		{Title: "Remote", Width: 8},
+		{Title: "Subdomain", Width: 16},
 	}
-	return s
+}
+
+func (p *clientStatusProvider) Rows() []table.Row {
+	rows := make([]table.Row, len(p.proxys))
+	for i, proxy := range p.proxys {
+		name := proxy.ProxyName
+		if name == "" {
+			name = "-"
+		}
+		sub := proxy.Subdomain
+		if sub == "" {
+			sub = "-"
+		}
+		rows[i] = table.Row{
+			name,
+			strings.ToUpper(proxy.ProxyType),
+			fmt.Sprintf("%d", proxy.LocalPort),
+			fmt.Sprintf("%d", proxy.RemotePort),
+			sub,
+		}
+	}
+	return rows
 }

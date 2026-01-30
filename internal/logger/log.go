@@ -2,6 +2,7 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -62,7 +63,7 @@ type Logger struct {
 func New(prefixs ...string) *Logger {
 	return &Logger{
 		prefixs: prefixs,
-		logger:  log.New(os.Stderr, "", log.LstdFlags),
+		logger:  log.New(gWriter, "", log.LstdFlags),
 	}
 }
 
@@ -73,17 +74,24 @@ func (l *Logger) Add(prefix string) {
 func (l *Logger) CloneAdd(prefix string) *Logger {
 	return &Logger{
 		prefixs: append(l.prefixs, prefix),
-		logger:  log.New(os.Stderr, "", log.LstdFlags),
+		logger:  log.New(gWriter, "", log.LstdFlags),
 	}
 }
 
 var defatLogger *Logger
+
+var gWriter io.Writer = os.Stderr
 
 func init() {
 	if val := os.Getenv("LOG_LEVEL"); val != "" {
 		SetLevel(fromLevel(val))
 	}
 
+	defatLogger = New()
+}
+
+func SetGlobalWriter(w io.Writer) {
+	gWriter = w
 	defatLogger = New()
 }
 

@@ -1,27 +1,29 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/abcdlsj/gnar/internal/client"
-	"github.com/abcdlsj/gnar/internal/server"
-	"github.com/abcdlsj/gnar/pkg/share"
-	"github.com/spf13/cobra"
+	"github.com/abcdlsj/gnar/internal/cli"
 )
 
 func main() {
-	var RootCmd = &cobra.Command{
-		Use:  "gnar",
-		Long: "gnar is a proxy tool.",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
-		},
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle interrupt signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	if err := cli.Execute(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\\n", err)
+		os.Exit(1)
 	}
-
-	RootCmd.AddCommand(server.Command())
-	RootCmd.AddCommand(client.Command())
-
-	RootCmd.Version = fmt.Sprintf("%s; buildstamp %s", share.GetVersion(), share.BuildStamp)
-
-	RootCmd.Execute()
 }

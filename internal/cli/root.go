@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/abcdlsj/gnar/internal/output"
+	"github.com/abcdlsj/gnar/internal/store"
 	"github.com/abcdlsj/gnar/internal/tui"
 	"github.com/abcdlsj/gnar/pkg/tunnel"
 )
@@ -61,10 +62,17 @@ func authCmd(ctx context.Context) *cobra.Command {
 				return fmt.Errorf("token is required")
 			}
 
-			// Create client and authenticate
+			// Create credential store
+			authStore, err := store.NewFileStore()
+			if err != nil {
+				return fmt.Errorf("create credential store: %w", err)
+			}
+
+			// Create client with store
 			cfg := tunnel.ClientConfig{
 				ServerAddr: server,
 				QUIC:       tunnel.QUICConfig{},
+				AuthStore:  authStore,
 			}
 			client := tunnel.NewClient(cfg)
 
@@ -89,10 +97,12 @@ func exposeCmd(ctx context.Context) *cobra.Command {
 		Use:   "expose [port]",
 		Short: "Expose a local service",
 		Long: `Expose a local service to the internet.
-		
+
+The server will automatically assign a remote port.
+
 Examples:
   gnar expose          # Run in TUI mode to select a service
-  gnar expose 3000     # Expose port 3000
+  gnar expose 3000     # Expose local port 3000 (server assigns remote port)
   gnar expose :8080    # Expose port 8080`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -129,15 +139,21 @@ func exposePort(ctx context.Context, server string, port int, subdomain, protoco
 
 	output.Info("Exposing port %d via %s...", port, server)
 
-	// Create client
+	// Create credential store
+	authStore, err := store.NewFileStore()
+	if err != nil {
+		return fmt.Errorf("create credential store: %w", err)
+	}
+
+	// Create client with store
 	cfg := tunnel.ClientConfig{
 		ServerAddr: server,
 		QUIC:       tunnel.QUICConfig{},
+		AuthStore:  authStore,
 	}
 	client := tunnel.NewClient(cfg)
 
-	// Check if authenticated - for now, we need a token
-	// In a real implementation, we'd load saved credentials
+	// Check if authenticated
 	if !client.IsAuthenticated() {
 		return fmt.Errorf("not authenticated. Run 'gnar auth %s' first", server)
 	}
@@ -160,7 +176,12 @@ func exposePort(ctx context.Context, server string, port int, subdomain, protoco
 	output.Success("Tunnel established!")
 	output.Line()
 	output.Pair("Local:", fmt.Sprintf("localhost:%d", port))
-	output.Pair("Public:", t.PublicURL)
+	if t.ServerPort > 0 {
+		output.Pair("Remote Port:", fmt.Sprintf("%d", t.ServerPort))
+	}
+	if t.PublicURL != "" {
+		output.Pair("Public URL:", t.PublicURL)
+	}
 	output.Line()
 	output.Muted("Press Ctrl+C to stop")
 

@@ -20,19 +20,14 @@ func main() {
 	)
 	flag.Parse()
 
-	if *domain == "" {
-		output.Error("Usage: gnar-server -domain=gnar.example.com")
-		os.Exit(1)
-	}
-
 	cfg := tunnel.ServerConfig{
 		ListenAddr: *addr,
 		QUIC: tunnel.QUICConfig{
 			Port: 0, // Auto-assign
 		},
 		HTTPS: tunnel.HTTPSConfig{
-			Enabled:  true,
-			AutoCert: *autoCert,
+			Enabled:  *domain != "",
+			AutoCert: *autoCert && *domain != "",
 			CertDir:  *certDir,
 		},
 		Domain: tunnel.DomainConfig{
@@ -61,8 +56,12 @@ func main() {
 
 	output.Title("Gnar Server")
 	output.Pair("Listen:", *addr)
-	output.Pair("Domain:", *domain)
-	output.Muted("Autocert enabled")
+	if *domain != "" {
+		output.Pair("Domain:", *domain)
+		output.Muted("Autocert enabled")
+	} else {
+		output.Warning("Running without domain - HTTPS and subdomain features disabled")
+	}
 	output.Line()
 
 	if err := server.Run(ctx); err != nil {

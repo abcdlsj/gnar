@@ -27,8 +27,9 @@ type QUICConfig struct {
 
 // ExposeOptions provides options for exposing a local port.
 type ExposeOptions struct {
-	Subdomain string
-	Protocol  string // http or https
+	Subdomain  string
+	Protocol   string // http or https
+	RemotePort int    // 0 = auto-assign
 }
 
 // ConnectionState represents the client's connection state.
@@ -53,13 +54,24 @@ type Client struct {
 
 // NewClient creates a new tunnel client.
 func NewClient(cfg ClientConfig) *Client {
-	return &Client{
+	client := &Client{
 		config:  cfg,
-		auth:    newAuthManager(cfg.AuthStore),
 		tunnels: make(map[string]*Tunnel),
 		events:  newEventEmitter(),
 		state:   Disconnected,
 	}
+
+	// Create auth manager with store
+	client.auth = newAuthManager(cfg.AuthStore)
+
+	// If we have a store, try to load existing credential
+	if cfg.AuthStore != nil && cfg.ServerAddr != "" {
+		if cred, err := cfg.AuthStore.Load(cfg.ServerAddr); err == nil {
+			client.auth.credential = cred
+		}
+	}
+
+	return client
 }
 
 // Auth authenticates with the server using the provided token.

@@ -25,7 +25,9 @@ func (s *LimitReadWriter) Read(p []byte) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	s.limiter.WaitN(context.Background(), n)
+	if err := s.limiter.WaitN(context.Background(), n); err != nil {
+		return n, err
+	}
 	return n, nil
 }
 
@@ -34,7 +36,9 @@ func (s *LimitReadWriter) Write(p []byte) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	s.limiter.WaitN(context.Background(), n)
+	if err := s.limiter.WaitN(context.Background(), n); err != nil {
+		return n, err
+	}
 	return n, nil
 }
 

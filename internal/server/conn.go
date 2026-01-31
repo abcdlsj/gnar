@@ -36,8 +36,8 @@ func (c *TCPConnMap) Add(id string, conn net.Conn) {
 }
 
 func (c *TCPConnMap) Get(id string) (io.ReadWriteCloser, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	conn, ok := c.conns[id]
 	return conn.conn, ok
 }
@@ -88,6 +88,8 @@ func (c *UDPConnMap) Get(id string) (*net.UDPConn, bool) {
 func (c *UDPConnMap) Del(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.conns[id].Close()
+	if conn, ok := c.conns[id]; ok {
+		conn.Close()
+	}
 	delete(c.conns, id)
 }

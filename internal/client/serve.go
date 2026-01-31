@@ -11,9 +11,8 @@ import (
 	"syscall"
 
 	"github.com/abcdlsj/gnar/internal/client/control"
-	"github.com/abcdlsj/gnar/internal/client/tunnel"
 	"github.com/abcdlsj/gnar/internal/logger"
-	"github.com/abcdlsj/gnar/internal/terminal"
+	"github.com/abcdlsj/gnar/internal/ui"
 	"github.com/abcdlsj/gnar/pkg/proto"
 	"github.com/abcdlsj/gnar/pkg/share"
 )
@@ -26,21 +25,18 @@ type Proxyer struct {
 	remotePort int
 	localPort  int
 	token      string
-	svraddr    string // server host:port
+	svraddr    string
 	proxyName  string
 	subdomain  string
 	speedLimit string
 	proxyType  string
 	ctrlDialer control.AuthSvrDialer
-	logger     *logger.Logger
-
-	mu sync.Mutex
+	logPrefix  string
+	mu         sync.Mutex
 }
 
 func newClient(cfg Config) *Client {
-	return &Client{
-		cfg: cfg,
-	}
+	return &Client{cfg: cfg}
 }
 
 func newProxyer(svraddr string, token string, mux bool, f Proxy) *Proxyer {
@@ -58,7 +54,7 @@ func newProxyer(svraddr string, token string, mux bool, f Proxy) *Proxyer {
 		localPort:  f.LocalPort,
 		speedLimit: f.SpeedLimit,
 		proxyType:  f.ProxyType,
-		logger:     logger.New(logPrefix),
+		logPrefix:  logPrefix,
 		ctrlDialer: control.NewTCPDialer(svraddr, token),
 	}
 
@@ -116,13 +112,13 @@ func (c *Client) Run() error {
 func (f *Proxyer) Run() {
 	defer func() {
 		if r := recover(); r != nil {
-			f.logger.Fatalf("Proxy panic: %v", r)
+			logger.Fatalf("%s Proxy panic: %v", f.logPrefix, r)
 		}
 	}()
 
 	rConn, err := f.ctrlDialer.Open()
 	if err != nil {
-		f.logger.Fatalf("Error open svr connection to remote: %v", err)
+		logger.Fatalf("%s Error open svr connection to remote: %v", f.logPrefix, err)
 	}
 
 	f.mustNewProxy(rConn)
@@ -130,99 +126,84 @@ func (f *Proxyer) Run() {
 	for {
 		p, buf, err := proto.Read(rConn)
 		if err != nil {
-			f.logger.Errorf("Error reading msg from remote: %v", err)
+			logger.Errorf("%s Error reading msg from remote: %v", f.logPrefix, err)
 			f.cancel()
 			return
 		}
 
-		nlogger := f.logger.CloneAdd(p.String())
 		switch p {
 		case proto.PacketExchange:
 			msg := &proto.MsgExchange{}
 			if err := json.Unmarshal(buf, msg); err != nil {
-				nlogger.Errorf("Error reading exchange msg from remote: %v", err)
+				logger.Errorf("%s Error reading exchange msg from remote: %v", f.logPrefix, err)
 				f.cancel()
 				return
 			}
-
-			f.handleExchange(msg, nlogger)
+			f.handleExchange(msg)
 		case proto.PacketHeartbeat:
-			msg := &proto.MsgHeartbeat{}
-			if err := json.Unmarshal(buf, msg); err != nil {
-				nlogger.Errorf("Error reading heartbeat msg from remote: %v", err)
-				f.cancel()
-				return
-			}
-
-			nlogger.Debug("")
+			logger.Debugf("%s Heartbeat", f.logPrefix)
 		}
 	}
 }
 
-func (f *Proxyer) handleExchange(msg *proto.MsgExchange, nlogger *logger.Logger) {
-	nlogger.Infof("Receive user conn from server, start proxying, conn_id: %s", msg.ConnId)
+func (f *Proxyer) handleExchange(msg *proto.MsgExchange) {
+	logger.Infof("%s Receive user conn, start proxying, conn_id: %s", f.logPrefix, msg.ConnId)
 	rConn, err := f.ctrlDialer.Open()
 	if err != nil {
-		nlogger.Errorf("Error connecting to remote: %v", err)
+		logger.Errorf("%s Error connecting to remote: %v", f.logPrefix, err)
 		return
 	}
 
 	if err = proto.Send(rConn, proto.NewMsgExchange(msg.ConnId, f.proxyType)); err != nil {
-		nlogger.Infof("Error sending exchange msg to remote: %v", err)
+		logger.Errorf("%s Error sending exchange msg to remote: %v", f.logPrefix, err)
 		return
 	}
 
-	go tunnel.RunTunnel(f.localPort, msg.ProxyType, f.speedLimit, nlogger, rConn)
+	go runTunnel(f.localPort, msg.ProxyType, f.speedLimit, rConn)
 }
 
 func (f *Proxyer) mustNewProxy(rConn net.Conn) {
 	if err := proto.Send(rConn, proto.NewMsgProxy(f.proxyName, f.subdomain,
 		f.proxyType, f.remotePort)); err != nil {
-		f.logger.Fatalf("Error send proxy msg to remote: %v", err)
+		logger.Fatalf("%s Error send proxy msg to remote: %v", f.logPrefix, err)
 	}
 
 	pxyResp := &proto.MsgProxyResp{}
 	if err := proto.Recv(rConn, pxyResp); err != nil {
-		f.logger.Fatal("Error reading proxy resp msg from remote, please check your config")
+		logger.Fatal("Error reading proxy resp msg from remote, please check your config")
 	}
 
 	if pxyResp.Status != "success" {
-		f.logger.Fatalf("Proxy create failed, status: %s, remote port: %d", pxyResp.Status, f.remotePort)
+		logger.Fatalf("%s Proxy create failed, status: %s, remote port: %d", f.logPrefix, pxyResp.Status, f.remotePort)
 	}
 
 	if pxyResp.Domain != "" {
-		f.logger.Infof("Proxy create success, domain: %s", terminal.CreateProxyLink(pxyResp.Domain))
+		logger.Infof("%s Proxy create success, domain: https://%s", f.logPrefix, pxyResp.Domain)
 	} else {
-		f.logger.Info("Proxy create success!")
+		logger.Infof("%s Proxy create success!", f.logPrefix)
 	}
 }
 
 func (c *Client) printMetaInfo() {
-	fmt.Println("---")
-	fmt.Println("Gnar Client")
-	fmt.Printf("Version: %s\n", share.GetVersion())
-	fmt.Printf("Server Address: %s\n", c.cfg.SvrAddr)
-	fmt.Printf("Token Authentication: %v\n", c.cfg.Token != "")
-	fmt.Printf("Multiplex: %v\n", c.cfg.Multiplex)
-	fmt.Println("Proxies:")
-	for _, proxy := range c.cfg.Proxys {
-		name := proxy.ProxyName
-		if name == "" {
-			name = "<empty>"
-		}
-		fmt.Printf("  - Name: %s\n", name)
-		fmt.Printf("    Local Port: %d\n", proxy.LocalPort)
-		fmt.Printf("    Remote Port: %d\n", proxy.RemotePort)
-		fmt.Printf("    Type: %s\n", proxy.ProxyType)
-		fmt.Printf("    Subdomain: %s\n", getValueOrEmpty(proxy.Subdomain))
-		fmt.Printf("    Speed Limit: %s\n", getValueOrEmpty(proxy.SpeedLimit))
-	}
-	fmt.Println("---")
-}
+	fmt.Println(ui.RenderClientBanner(ui.ClientInfo{
+		Version:   share.GetVersion(),
+		SvrAddr:   c.cfg.SvrAddr,
+		Multiplex: c.cfg.Multiplex,
+		Token:     c.cfg.Token != "",
+	}))
 
-func getValueOrEmpty(s string) string {
-	if s == "" {
-		return "<empty>"
+	var proxies []ui.ProxyInfo
+	for _, p := range c.cfg.Proxys {
+		proxies = append(proxies, ui.ProxyInfo{
+			Name:       p.ProxyName,
+			LocalPort:  p.LocalPort,
+			RemotePort: p.RemotePort,
+			ProxyType:  p.ProxyType,
+			Subdomain:  p.Subdomain,
+			SpeedLimit: p.SpeedLimit,
+		})
 	}
-	return s
+	if len(proxies) > 0 {
+		fmt.Println(ui.RenderProxyList(proxies))
+	}
 }

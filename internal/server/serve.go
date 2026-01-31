@@ -12,7 +12,7 @@ import (
 	"github.com/abcdlsj/gnar/internal/auth"
 	"github.com/abcdlsj/gnar/internal/logger"
 	"github.com/abcdlsj/gnar/internal/proxy"
-	"github.com/abcdlsj/gnar/internal/server/conn"
+	"github.com/abcdlsj/gnar/internal/ui"
 	"github.com/abcdlsj/gnar/pkg/proto"
 	"github.com/abcdlsj/gnar/pkg/share"
 	"github.com/google/uuid"
@@ -21,8 +21,8 @@ import (
 
 type Server struct {
 	cfg           Config
-	tcpConnMap    conn.TCPConnMap
-	udpConnMap    conn.UDPConnMap
+	tcpConnMap    TCPConnMap
+	udpConnMap    UDPConnMap
 	authenticator auth.Authenticator
 	resources     *resourceManager
 }
@@ -47,8 +47,8 @@ func newResourceManager(cfg Config) *resourceManager {
 func newServer(cfg Config) *Server {
 	s := &Server{
 		cfg:           cfg,
-		tcpConnMap:    conn.NewTCPConnMap(),
-		udpConnMap:    conn.NewUDPConnMap(),
+		tcpConnMap:    NewTCPConnMap(),
+		udpConnMap:    NewUDPConnMap(),
 		authenticator: &auth.Nop{},
 		resources:     newResourceManager(cfg),
 	}
@@ -68,18 +68,13 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) printMetaInfo() {
-	fmt.Println("---")
-	fmt.Println("Gnar Server")
-	fmt.Printf("Version: %s\n", share.GetVersion())
-	fmt.Printf("Port: %d\n", s.cfg.Port)
-	fmt.Printf("Admin Port: %d\n", s.cfg.AdminPort)
-	fmt.Printf("Domain Tunnel: %v\n", s.cfg.DomainTunnel)
-	fmt.Printf("Domain: %s\n", s.cfg.Domain)
-	fmt.Printf("Token: %s\n", s.cfg.Token)
-	fmt.Printf("Token Authentication: %v\n", s.cfg.Token != "")
-	fmt.Printf("Multiplex: %v\n", s.cfg.Multiplex)
-	fmt.Printf("Caddy Server Name: %s\n", s.cfg.CaddySrvName)
-	fmt.Println("---")
+	fmt.Println(ui.RenderServerBanner(ui.ServerInfo{
+		Version:   share.GetVersion(),
+		Port:      s.cfg.Port,
+		AdminPort: s.cfg.AdminPort,
+		Domain:    s.cfg.Domain,
+		Multiplex: s.cfg.Multiplex,
+	}))
 }
 
 func (s *Server) startAdminServer() {
@@ -399,13 +394,13 @@ func (s *Server) setupAndRunProxy(handler proxyHandler, uPort int, domain string
 		return fmt.Errorf("error sending proxy accept message: %v", err)
 	}
 
-	go tickHeart(cConn, logger.New(fmt.Sprintf("[:%d]", uPort)))
+	go tickHeart(cConn, uPort)
 
 	return handler.handleConn(s, listener, cConn, msg)
 }
 
 func (s *Server) handleTCPUserConn(userConn net.Conn, cConn net.Conn, msg *proto.MsgProxyReq) {
-	uid := conn.NewUuid()
+	uid := NewUuid()
 	s.tcpConnMap.Add(uid, userConn)
 	if err := proto.Send(cConn, proto.NewMsgExchange(uid, msg.ProxyType)); err != nil {
 		logger.Errorf("Error sending exchange message: %v", err)
@@ -413,13 +408,13 @@ func (s *Server) handleTCPUserConn(userConn net.Conn, cConn net.Conn, msg *proto
 	logger.Debugf("Send new user conn id: %s", uid)
 }
 
-func tickHeart(cConn net.Conn, hlogger *logger.Logger) {
+func tickHeart(cConn net.Conn, port int) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		if err := proto.Send(cConn, proto.NewMsgHeartbeat()); err != nil {
-			hlogger.Warnf("Error sending heartbeat message: %v", err)
+			logger.Warnf("Port %d heartbeat failed: %v", port, err)
 			return
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abcdlsj/gnar/internal/httpx"
 	"github.com/abcdlsj/gnar/internal/norm"
 )
 
@@ -68,7 +69,7 @@ func (s *DaemonServer) Run(ctx context.Context) error {
 
 func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeDaemonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httpx.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	_, _ = w.Write([]byte("ok"))
@@ -77,11 +78,11 @@ func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *DaemonServer) handleTunnels(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeDaemonJSON(w, http.StatusOK, ListManagedResponse{Tunnels: s.daemon.List()})
+		httpx.WriteJSON(w, http.StatusOK, ListManagedResponse{Tunnels: s.daemon.List()})
 	case http.MethodPost:
 		var req StartTunnelRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeDaemonError(w, http.StatusBadRequest, "invalid request")
+			httpx.WriteError(w, http.StatusBadRequest, "invalid request")
 			return
 		}
 
@@ -101,12 +102,12 @@ func (s *DaemonServer) handleTunnels(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		tunnel, err := s.daemon.Start(runCtx, cfg)
 		if err != nil {
-			writeDaemonError(w, http.StatusConflict, err.Error())
+			httpx.WriteError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeDaemonJSON(w, http.StatusCreated, StartTunnelResponse{Tunnel: tunnel})
+		httpx.WriteJSON(w, http.StatusCreated, StartTunnelResponse{Tunnel: tunnel})
 	default:
-		writeDaemonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httpx.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -114,7 +115,7 @@ func (s *DaemonServer) handleTunnelByName(w http.ResponseWriter, r *http.Request
 	name := strings.TrimPrefix(r.URL.Path, "/api/v1/tunnels/")
 	name = strings.Trim(name, "/")
 	if name == "" {
-		writeDaemonError(w, http.StatusBadRequest, "missing tunnel name")
+		httpx.WriteError(w, http.StatusBadRequest, "missing tunnel name")
 		return
 	}
 
@@ -124,29 +125,19 @@ func (s *DaemonServer) handleTunnelByName(w http.ResponseWriter, r *http.Request
 	case http.MethodGet:
 		tunnel, err := s.daemon.Get(tenant, name)
 		if err != nil {
-			writeDaemonError(w, http.StatusNotFound, err.Error())
+			httpx.WriteError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeDaemonJSON(w, http.StatusOK, StartTunnelResponse{Tunnel: tunnel})
+		httpx.WriteJSON(w, http.StatusOK, StartTunnelResponse{Tunnel: tunnel})
 	case http.MethodDelete:
 		stopCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := s.daemon.Stop(stopCtx, tenant, name); err != nil {
-			writeDaemonError(w, http.StatusNotFound, err.Error())
+			httpx.WriteError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		writeDaemonJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 	default:
-		writeDaemonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httpx.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-}
-
-func writeDaemonJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
-}
-
-func writeDaemonError(w http.ResponseWriter, status int, message string) {
-	writeDaemonJSON(w, status, map[string]string{"error": message})
 }

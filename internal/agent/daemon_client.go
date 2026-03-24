@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/abcdlsj/gnar/internal/httpx"
 	"github.com/abcdlsj/gnar/internal/norm"
 )
 
@@ -75,28 +75,11 @@ func (c *DaemonClient) Health(ctx context.Context) error {
 }
 
 func (c *DaemonClient) newJSONRequest(ctx context.Context, method, path string, payload any) (*http.Request, error) {
-	buf, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	req, err := c.newRequest(ctx, method, path, bytes.NewReader(buf))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return req, nil
+	return httpx.NewJSONRequest(ctx, c.baseURL, method, path, payload)
 }
 
 func (c *DaemonClient) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
-	base, err := url.Parse(c.baseURL)
-	if err != nil {
-		return nil, err
-	}
-	relative, err := url.Parse(path)
-	if err != nil {
-		return nil, err
-	}
-	return http.NewRequestWithContext(ctx, method, base.ResolveReference(relative).String(), body)
+	return httpx.NewRequest(ctx, c.baseURL, method, path, body)
 }
 
 func (c *DaemonClient) do(req *http.Request, out any) error {
@@ -107,11 +90,7 @@ func (c *DaemonClient) do(req *http.Request, out any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		var payload map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload["error"] != "" {
-			return fmt.Errorf(payload["error"])
-		}
-		return fmt.Errorf("unexpected status: %s", resp.Status)
+		return httpx.DecodeError(resp)
 	}
 
 	if out == nil {

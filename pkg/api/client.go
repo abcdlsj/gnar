@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/abcdlsj/gnar/internal/httpx"
 )
 
 type Client struct {
@@ -93,15 +94,7 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) newRequest(ctx context.Context, method, endpoint string) (*http.Request, error) {
-	base, err := url.Parse(c.serverURL)
-	if err != nil {
-		return nil, err
-	}
-	relative, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, method, base.ResolveReference(relative).String(), nil)
+	req, err := httpx.NewRequest(ctx, c.serverURL, method, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -119,27 +112,11 @@ func (c *Client) do(req *http.Request, out any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		var payload ErrorResponse
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload.Error != "" {
-			return fmt.Errorf(payload.Error)
-		}
-		return fmt.Errorf("unexpected status: %s", resp.Status)
+		return httpx.DecodeError(resp)
 	}
 
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func TokenFromRequest(r *http.Request) string {
-	token := r.URL.Query().Get("token")
-	if token != "" {
-		return token
-	}
-	header := r.Header.Get("Authorization")
-	if strings.HasPrefix(header, "Bearer ") {
-		return strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-	}
-	return ""
 }

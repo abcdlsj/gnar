@@ -10,10 +10,10 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/abcdlsj/gnar/internal/httpx"
 	"github.com/abcdlsj/gnar/pkg/api"
 )
 
@@ -128,7 +128,7 @@ func (r *Runner) register(ctx context.Context) (*api.RegisterTunnelResponse, err
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, decodeError(resp)
+		return nil, httpx.DecodeError(resp)
 	}
 
 	var registration api.RegisterTunnelResponse
@@ -151,7 +151,7 @@ func (r *Runner) poll(ctx context.Context, sessionID string) (api.AgentEvent, er
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return api.AgentEvent{}, decodeError(resp)
+		return api.AgentEvent{}, httpx.DecodeError(resp)
 	}
 
 	var payload api.PollResponse
@@ -174,7 +174,7 @@ func (r *Runner) respond(ctx context.Context, sessionID string, payload api.Post
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted {
-		return decodeError(resp)
+		return httpx.DecodeError(resp)
 	}
 	return nil
 }
@@ -209,7 +209,7 @@ func (r *Runner) forward(ctx context.Context, request *api.HTTPRequestEvent) api
 		return localErrorResponse(request.RequestID, err)
 	}
 
-	outboundReq.Header = http.Header(cloneHeaderMap(request.Headers))
+	outboundReq.Header = http.Header(httpx.CloneHeaderMap(request.Headers))
 	outboundReq.Header.Set("X-Forwarded-Host", request.Host)
 	outboundReq.Header.Set("X-Forwarded-Proto", request.Scheme)
 	outboundReq.Header.Set("X-Forwarded-For", request.RemoteAddr)
@@ -229,7 +229,7 @@ func (r *Runner) forward(ctx context.Context, request *api.HTTPRequestEvent) api
 	return api.PostResponseRequest{
 		RequestID:  request.RequestID,
 		StatusCode: resp.StatusCode,
-		Headers:    headerToMap(resp.Header),
+		Headers:    httpx.HeaderToMap(resp.Header),
 		Body:       body,
 	}
 }
@@ -249,28 +249,11 @@ func (r *Runner) printBanner(registration *api.RegisterTunnelResponse) {
 }
 
 func (r *Runner) newJSONRequest(ctx context.Context, method, endpoint string, payload any) (*http.Request, error) {
-	buf, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	req, err := r.newRequest(ctx, method, endpoint, bytes.NewReader(buf))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return req, nil
+	return httpx.NewJSONRequest(ctx, r.cfg.ServerURL, method, endpoint, payload)
 }
 
 func (r *Runner) newRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Request, error) {
-	base, err := url.Parse(r.cfg.ServerURL)
-	if err != nil {
-		return nil, err
-	}
-	relative, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	return http.NewRequestWithContext(ctx, method, base.ResolveReference(relative).String(), body)
+	return httpx.NewRequest(ctx, r.cfg.ServerURL, method, endpoint, body)
 }
 
 func resolveOutboundURL(target, requestPath, rawQuery string) (string, error) {
@@ -315,32 +298,6 @@ func mergeRawQuery(baseQuery, requestQuery string) string {
 	}
 }
 
-func cloneHeaderMap(values map[string][]string) map[string][]string {
-	cloned := make(map[string][]string, len(values))
-	for key, items := range values {
-		if shouldSkipHeader(key) {
-			continue
-		}
-		copied := make([]string, len(items))
-		copy(copied, items)
-		cloned[key] = copied
-	}
-	return cloned
-}
-
-func headerToMap(header http.Header) map[string][]string {
-	result := make(map[string][]string, len(header))
-	for key, values := range header {
-		if shouldSkipHeader(key) {
-			continue
-		}
-		copied := make([]string, len(values))
-		copy(copied, values)
-		result[key] = copied
-	}
-	return result
-}
-
 func readLimited(body io.Reader, limit int64) ([]byte, error) {
 	if limit <= 0 {
 		return io.ReadAll(body)
@@ -364,22 +321,5 @@ func localErrorResponse(requestID string, err error) api.PostResponseRequest {
 			"Content-Type": {"text/plain; charset=utf-8"},
 		},
 		Body: []byte(err.Error()),
-	}
-}
-
-func decodeError(resp *http.Response) error {
-	var payload api.ErrorResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload.Error != "" {
-		return fmt.Errorf("%s", payload.Error)
-	}
-	return fmt.Errorf("unexpected status: %s", resp.Status)
-}
-
-func shouldSkipHeader(key string) bool {
-	switch strings.ToLower(key) {
-	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade":
-		return true
-	default:
-		return false
 	}
 }

@@ -1,5 +1,0 @@
-port = 8910
-admin-port = 8911
-domain-tunnel = false
-domain = "example.com"
-# token = "abcdlsj" # optional

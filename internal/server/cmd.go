@@ -1,40 +1,66 @@
 package server
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 func Command() *cobra.Command {
-	var cfgFile string
+	cfg := DefaultConfig()
+	var agentCredentials []string
+	var allowedDomainSuffixes []string
+	var tenantDomainSuffixes []string
 
 	cmd := &cobra.Command{
-		Use:   "server [port]",
-		Short: "Run gnar server",
-		Long:  "Run gnar server with optional port argument",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			viper.BindPFlags(cmd.PersistentFlags())
-
-			cfg, err := LoadConfig(cfgFile, args)
-			if err != nil {
-				return fmt.Errorf("error loading config: %v", err)
+		Use:   "server",
+		Short: "Run the public edge and control plane",
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			cfg.AllowedDomainSuffixes = normalizeSuffixes(allowedDomainSuffixes)
+			for _, item := range agentCredentials {
+				tenant, token, ok := strings.Cut(item, "=")
+				if !ok {
+					return fmt.Errorf("invalid agent credential: %s", item)
+				}
+				tenant = normalizeTenant(tenant)
+				token = strings.TrimSpace(token)
+				if token == "" {
+					return fmt.Errorf("invalid agent credential: %s", item)
+				}
+				cfg.AgentCredentials[tenant] = token
 			}
-
-			return newServer(cfg).Run()
+			for _, item := range tenantDomainSuffixes {
+				tenant, suffix, ok := strings.Cut(item, "=")
+				if !ok {
+					return fmt.Errorf("invalid tenant domain suffix: %s", item)
+				}
+				tenant = normalizeTenant(tenant)
+				normalized := normalizeSuffixes([]string{suffix})
+				if len(normalized) == 0 {
+					return fmt.Errorf("invalid tenant domain suffix: %s", item)
+				}
+				cfg.TenantDomainSuffixes[tenant] = append(cfg.TenantDomainSuffixes[tenant], normalized...)
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return Run(context.Background(), cfg)
 		},
 	}
 
-	cmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file")
-	cmd.PersistentFlags().IntP("port", "p", 8910, "server port")
-	cmd.PersistentFlags().IntP("admin-port", "a", 0, "admin server port")
-	cmd.PersistentFlags().BoolP("domain-tunnel", "d", false, "enable domain tunnel")
-	cmd.PersistentFlags().StringP("domain", "D", "", "domain name")
-	cmd.PersistentFlags().StringP("token", "t", "", "token")
-	cmd.PersistentFlags().BoolP("multiplex", "m", false, "multiplex client/server control connection")
-	cmd.PersistentFlags().StringP("caddy-srv-name", "s", "srv0", "caddy server name")
-
+	cmd.Flags().StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "listen address")
+	cmd.Flags().StringVar(&cfg.PublicURL, "public-url", cfg.PublicURL, "public origin used in generated URLs")
+	cmd.Flags().StringVar(&cfg.BaseDomain, "base-domain", cfg.BaseDomain, "base domain for generated hostnames")
+	cmd.Flags().StringVar(&cfg.AgentToken, "agent-token", cfg.AgentToken, "shared token for agent registration")
+	cmd.Flags().StringVar(&cfg.ManageToken, "manage-token", cfg.ManageToken, "token for management APIs")
+	cmd.Flags().StringSliceVar(&agentCredentials, "agent-credential", nil, "tenant=token pair for agent registration")
+	cmd.Flags().StringSliceVar(&allowedDomainSuffixes, "allow-domain-suffix", nil, "globally allowed custom domain suffix")
+	cmd.Flags().StringSliceVar(&tenantDomainSuffixes, "tenant-domain-suffix", nil, "tenant=suffix pair for custom domain binding")
+	cmd.Flags().DurationVar(&cfg.RequestTimeout, "request-timeout", cfg.RequestTimeout, "max time a public request can wait for an agent response")
+	cmd.Flags().DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "session idle timeout")
+	cmd.Flags().DurationVar(&cfg.PollTimeout, "poll-timeout", cfg.PollTimeout, "long poll timeout")
+	cmd.Flags().Int64Var(&cfg.MaxBodyBytes, "max-body-bytes", cfg.MaxBodyBytes, "max buffered request body size")
 	return cmd
 }

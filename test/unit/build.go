@@ -1,41 +1,49 @@
 package unit
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
-
-	"github.com/abcdlsj/gnar/test/common"
+	"testing"
 )
 
-func BuildGnarBinary() error {
-	var once sync.Once
-	once.Do(func() {
-		wd, err := os.Getwd()
-		if err != nil {
-			fmt.Printf("failed to get working directory: %v\n", err)
-			return
-		}
+var (
+	buildOnce sync.Once
+	buildPath string
+	buildErr  error
+)
 
-		projectRoot := filepath.Dir(filepath.Dir(wd))
-		mainPath := filepath.Join(projectRoot, "cmd/gnar/main.go")
+func BinaryPath(t *testing.T) string {
+	t.Helper()
 
-		cmd := exec.Command("go", "build", "-o", common.GnarPath, mainPath)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			fmt.Printf("failed to build gnar: %v\n", err)
-			return
-		}
-
-		if _, err := os.Stat(common.GnarPath); os.IsNotExist(err) {
-			fmt.Printf("gnar binary not found at %s after build\n", common.GnarPath)
-			return
-		}
-
-		fmt.Printf("Gnar binary built successfully at: %s\n", common.GnarPath)
+	buildOnce.Do(func() {
+		buildPath, buildErr = buildBinary("./cmd/gnar", "gnar-build-*", "gnar-test")
 	})
-	return nil
+
+	if buildErr != nil {
+		t.Fatalf("build failed: %v", buildErr)
+	}
+
+	return buildPath
+}
+
+func buildBinary(pkg, dirPattern, outputName string) (string, error) {
+	dir, err := os.MkdirTemp("", dirPattern)
+	if err != nil {
+		return "", err
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Clean(filepath.Join(wd, "../.."))
+	outputPath := filepath.Join(dir, outputName)
+	cmd := exec.Command("go", "build", "-o", outputPath, pkg)
+	cmd.Dir = root
+	cmd.Env = os.Environ()
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return outputPath, nil
 }

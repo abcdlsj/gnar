@@ -1,339 +1,149 @@
-<!-- TOC start (generated with https://github.com/derlin/bitdowntoc) -->
+# gnar
 
-- [Gnar](#gnar)
-  - [Features](#features)
-  - [Installation](#installation)
-  - [Quick Start](#quick-start)
-  - [Configuration](#configuration)
-    - [Command line flags](#command-line-flags)
-      - [Server](#server)
-      - [Client](#client)
-    - [Configuration Files](#configuration-files)
-      - [Client Configuration (client\_config.toml)](#client-configuration-client_configtoml)
-      - [Server Configuration (server\_config.toml)](#server-configuration-server_configtoml)
-    - [Positional Arguments](#positional-arguments)
-      - [Server](#server-1)
-      - [Client](#client-1)
-  - [Advanced Usage](#advanced-usage)
-    - [Subdomain Proxy](#subdomain-proxy)
-    - [Deploying on `fly.io`](#deploying-on-flyio)
-  - [Environment Variables](#environment-variables)
-    - [Server](#server-2)
-    - [Client](#client-2)
-  - [Trubleshooting](#trubleshooting)
-  - [Contributing](#contributing)
-  - [Credits](#credits)
-  - [License](#license)
+gnar is an HTTP-first local service publishing tool.
 
-<!-- TOC end -->
+## Quick start
 
-<!-- TOC --><a name="gnar"></a>
-# Gnar
-A Versatile Proxy Tool with Auto-HTTPS Subdomain Support.
-
-![run gif](assets/gnar.gif)
-
-Gnar is a powerful and flexible __proxy__ tool, similar to frp, with built-in support for __Auto-HTTPS__ subdomain proxying. It's designed to be simple yet feature-rich, making it an ideal solution for developers who need a reliable and secure proxy setup.
-
-## Features
-
-- Simple implementation with __minimal__ third-party dependencies
-- Client __graceful__ shutdown.
-- Support for __TCP/UDP__ traffic forwarding
-- __Subdomain proxy__ using Caddy server
-- Configurable via __command-line flags__ or a __configuration file__
-- __Multi-client__ forwarding support
-- Token-based __authentication__ for enhanced security
-- Server-side __admin panel__ for easy management
-- Integration of __yamux__ for __multiplexing__ connections
-- Deployable on __fly.io__
-
-## Installation
-
-```
-git clone https://github.com/abcdlsj/gnar
-make
-```
-
-## Quick Start
-
-1. Start the server:
-   with positional argument:
-   ```bash
-   gnar server 8910
-   ```
-
-   with flag:
-   ```bash
-   gnar server -p 8910
-   ```
-
-   Or using a configuration file:
-   ```bash
-   gnar server -c server_config.toml
-   ```
-
-2. Start the client:
-   with positional argument:
-   ```bash
-   gnar client localhost:8910 3000:9001
-   ```
-
-   with flag:
-   ```bash
-   gnar client -s localhost:8910 -p 3000:9001
-   ```
-
-   Or using a configuration file:
-   ```bash
-   gnar client -c client_config.toml
-   ```
-
-3. Start a sample service:
-   ```bash
-   python3 -m http.server 3000
-   ```
-
-4. Access your service at `localhost:9001`
-
-## Configuration
-
-Gnar supports both command-line flags and configuration files. Here's a sample client configuration:
-
-### Command line flags
-
-#### Server
-
-```
-Run gnar server with optional port argument
-
-Usage:
-  gnar server [port] [flags]
-
-Flags:
-  -a, --admin-port int          admin server port
-  -s, --caddy-srv-name string   caddy server name (default "srv0")
-  -c, --config string           config file
-  -D, --domain string           domain name
-  -d, --domain-tunnel           enable domain tunnel
-  -h, --help                    help for server
-  -m, --multiplex               multiplex client/server control connection
-  -p, --port int                server port (default 8910)
-  -t, --token string            token
-```
-
-#### Client
-
-```
-Run gnar client with optional server address and port mapping
-
-Usage:
-  gnar client [server-addr] [local-port:remote-port] [flags]
-
-Flags:
-  -c, --config string        config file
-  -h, --help                 help for client
-  -m, --multiplex            multiplex client/server control connection
-  -n, --proxy-name string    proxy name
-  -y, --proxy-type string    proxy transport protocol type (default "tcp")
-  -s, --server-addr string   server addr (default "localhost:8910")
-      --speed-limit string   speed limit
-  -d, --subdomain string     subdomain
-  -t, --token string         token
-```
-
-### Configuration Files
-
-#### Client Configuration (client_config.toml)
-
-```toml
-server-addr = "localhost:8910"
-token = "abcdlsj" # optional
-multiplex = true # optional, if true will use yamux to multiplex the connection
-
-[[proxys]]
-proxy-name = "python_http_file_service" # optional
-subdomain = "python3-http" # optional, if not set, will generate a random subdomain prefix
-local-port = 3000
-remote-port = 9001
-speed-limit = "100kb" # optional, if not set, will not limit speed
-proxy-type = "tcp"
-
-[[proxys]]
-local-port = 3001
-remote-port = 9002
-proxy-type = "tcp"
-```
-
-#### Server Configuration (server_config.toml)
-
-```toml
-port = 8910
-admin-port = 8911
-domain-tunnel = false
-domain = "example.com"
-# token = "abcdlsj" # optional
-multiplex = false
-```
-
-Server admin panel:
-![server admin screenshot](assets/server_admin_screenshot.png)
-
-### Positional Arguments
-
-#### Server
-
-The server command accepts an optional port number as a positional argument:
+Start the edge:
 
 ```bash
-gnar server [port]
+gnar server \
+  --listen :8910 \
+  --public-url http://127.0.0.1:8910
 ```
 
-If not provided, the default port (8910) or the port specified in the configuration file will be used.
-
-#### Client
-
-The client command accepts two optional positional arguments:
+Expose a local app:
 
 ```bash
-gnar client [server-addr] [local-port:remote-port]
+gnar http 3000 --server http://127.0.0.1:8910 --name demo
 ```
 
-1. `server-addr`: The address of the gnar server (e.g., "localhost:8910")
-2. `local-port:remote-port`: The local and remote port mapping (e.g., "3000:9001")
+Open the generated path URL:
 
-If these arguments are not provided, the values from the configuration file or default values will be used.
-
-## Advanced Usage
-
-### Subdomain Proxy
-
-> [!WARNING]
-> This need you have the base knowledge of caddy and caddy plugin.
-
-1. Set up your domain's DNS records:
-   ```
-   A *.example.com <your server ip>
-   A example.com <your server ip>
-   ```
-
-2. Start the Caddy server(or if you have running caddy, you can skip this step):
-   ```bash
-   caddy run --config <gnar path>/configs/caddy.json
-   ```
-
-3. Run the Gnar server with domain tunnel enabled:
-   ```bash
-   gnar server 8910 -D example.com -d
-   ```
-
-   can use `-s` to set caddy server name(default should be `srv0`).
-
-   gnar will use this name to create add new route.
-   
-   if you use `Caddyfile` to config caddy, you can use `sudo caddy adapt --config /etc/caddy/Caddyfile` to generate caddy.json.
-
-4. Start the client with a custom subdomain:
-   ```bash
-   gnar client localhost:8910 3000:9001 -d myapp
-   ```
-
-### Deploying on `fly.io`
-
-Gnar can be easily deployed on <https://fly.io>.
-
-> [!WARNING]
-> I haven't tested it for a long time, it may need to be updated.
-
-You can edit `entrypoint.sh` to start your own server **you need to special set forward port.**
-
-Example:
-```toml
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-app = "xxxx"
-primary_region = "hkg"
-
-[build]
-
-# Control
-[[services]]
-  internal_port = 8910
-  protocol = "tcp"
-
-  [[services.ports]]
-    port = 8910
-  
-# Admin
-[[services]]
-  internal_port = 8911
-  protocol = "tcp"
-
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-# Forward TCP
-[[services]]
-  internal_port = 9000
-  protocol = "tcp"
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 9000
+```text
+http://127.0.0.1:8910/t/default/demo
 ```
 
-Run with `fly launch`.
-
-After deployment, you can view `xxxx.fly.dev:9000` and then view your own internal server.
-
-## Environment Variables
-
-Gnar uses Viper to manage configuration, which allows for setting options via environment variables. The following environment variables are supported:
-
-### Server
-
-- `GNAR_PORT`: Server port
-- `GNAR_ADMIN_PORT`: Admin server port
-- `GNAR_DOMAIN_TUNNEL`: Enable domain tunnel (true/false)
-- `GNAR_DOMAIN`: Domain name
-- `GNAR_TOKEN`: Authentication token
-- `GNAR_MULTIPLEX`: Enable connection multiplexing (true/false)
-
-### Client
-
-- `GNAR_TOKEN`: Authentication token
-- `GNAR_MULTIPLEX`: Enable connection multiplexing (true/false)
-
-Environment variables take precedence over configuration files and command-line flags. To use an environment variable, prefix the uppercase option name with `GNAR_`. For example, to set the server port:
+Bind a custom domain:
 
 ```bash
-export GNAR_PORT=8080
-gnar server
+gnar server \
+  --listen :8910 \
+  --public-url https://edge.example.com \
+  --manage-token manage-secret \
+  --agent-credential default=agent-secret \
+  --allow-domain-suffix example.com
+
+gnar http 3000 \
+  --server https://edge.example.com \
+  --name demo \
+  --domain demo.example.com \
+  --token agent-secret
 ```
 
-This will start the server on port 8080, regardless of the default value or any value specified in a configuration file.
+Run a local daemon and start a detached tunnel:
 
-## Trubleshooting
+```bash
+gnar agent serve \
+  --listen 127.0.0.1:7777 \
+  --state-file ~/.gnar/agent-state.json
 
-1. subdomain proxy not work
+gnar http 3000 \
+  --server http://127.0.0.1:8910 \
+  --agent-url http://127.0.0.1:7777 \
+  --detach \
+  --name demo
+```
 
-  make sure you have set the dns record to your server ip. 
-  if you use cloudflare, need to set dns_key in caddy.json.
+## Model
 
-## Contributing
+- `gnar server` runs the control plane and the public HTTP edge.
+- `gnar http` registers a tunnel and forwards public HTTP requests to a local upstream.
+- `gnar agent serve` runs a local daemon so tunnels can outlive the foreground CLI process.
+- `gnar agent serve` persists managed tunnels and restores them after restart.
+- `gnar ls`, `gnar inspect`, and `gnar logs` read the live tunnel state from the server.
+- `gnar doctor` checks server reachability and optional local target readiness.
+- Every tunnel is namespaced by tenant and gets a path URL at `/t/<tenant>/<name>`.
+- Custom domains are supported in the first version.
 
-We welcome contributions to Gnar! Please read our [Contributing Guidelines](CONTRIBUTING.md) for more information on how to get started.
+## Manage
 
-## Credits
+List active tunnels:
 
-Thanks to [JetBrains](https://www.jetbrains.com/) for providing free licenses to support this project.
+```bash
+gnar ls --server http://127.0.0.1:8910
+```
 
-[![JetBrains Logo](https://resources.jetbrains.com/storage/products/company/brand/logos/jb_beam.svg)](https://jb.gg/OpenSourceSupport)
+List only one tenant:
 
-## License
+```bash
+gnar ls --server http://127.0.0.1:8910 --tenant default
+```
 
-Gnar is released under the [MIT License](LICENSE).
+Inspect one tunnel:
+
+```bash
+gnar inspect demo --server http://127.0.0.1:8910 --tenant default
+```
+
+Show recent requests:
+
+```bash
+gnar logs demo --server http://127.0.0.1:8910 --tenant default --limit 10
+```
+
+Run diagnostics:
+
+```bash
+gnar doctor 3000 --server http://127.0.0.1:8910
+```
+
+List local daemon tunnels:
+
+```bash
+gnar agent ls --url http://127.0.0.1:7777
+```
+
+Stop a detached tunnel:
+
+```bash
+gnar stop demo --agent-url http://127.0.0.1:7777 --tenant default
+```
+
+## Flags
+
+Server:
+
+```bash
+gnar server \
+  --listen :8910 \
+  --public-url http://127.0.0.1:8910 \
+  --base-domain apps.example.com \
+  --agent-token shared-agent-secret \
+  --manage-token shared-manage-secret \
+  --agent-credential team-a=team-a-agent-secret \
+  --allow-domain-suffix example.com \
+  --tenant-domain-suffix team-a=team-a.example.com
+```
+
+Expose a service:
+
+```bash
+gnar http 3000 \
+  --server http://127.0.0.1:8910 \
+  --tenant default \
+  --name my-api \
+  --domain api.example.com \
+  --token shared-agent-secret \
+  --request-timeout 30s \
+  --retry-backoff 1s
+```
+
+Management API:
+
+```bash
+gnar ls \
+  --server http://127.0.0.1:8910 \
+  --token shared-manage-secret \
+  --tenant default
+```

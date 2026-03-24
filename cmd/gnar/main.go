@@ -1,27 +1,13 @@
 package main
 
 import (
-	"fmt"
+	"log"
 
-	"github.com/abcdlsj/gnar/internal/client"
-	"github.com/abcdlsj/gnar/internal/server"
-	"github.com/abcdlsj/gnar/pkg/share"
-	"github.com/spf13/cobra"
+	"github.com/abcdlsj/gnar/internal/cli"
 )
 
 func main() {
-	var RootCmd = &cobra.Command{
-		Use:  "gnar",
-		Long: "gnar is a proxy tool.",
-		Run: func(cmd *cobra.Command, args []string) {
-			cmd.Help()
-		},
+	if err := cli.Execute(); err != nil {
+		log.Fatal(err)
 	}
-
-	RootCmd.AddCommand(server.Command())
-	RootCmd.AddCommand(client.Command())
-
-	RootCmd.Version = fmt.Sprintf("%s; buildstamp %s", share.GetVersion(), share.BuildStamp)
-
-	RootCmd.Execute()
 }

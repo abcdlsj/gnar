@@ -1,63 +1,118 @@
 package helpers
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"sync/atomic"
+	"testing"
 	"time"
-
-	"github.com/abcdlsj/gnar/test/common"
 )
 
-func StartProcess(name string, args ...string) (func() error, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+var fallbackPort int64 = 19080
 
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
+func FreePort(t *testing.T) int {
+	t.Helper()
 
-	return func() error {
-		return cmd.Process.Kill()
-	}, nil
-}
-
-func StartGnarServer(port string, mux bool) (func() error, error) {
-	args := []string{"server", port}
-	if mux {
-		args = append(args, "-m")
-	}
-	println("Starting gnar server with path:", common.GnarPath)
-	return StartProcess(common.GnarPath, args...)
-}
-
-func StartGnarClient(serverAddr, portMapping string, mux bool) (func() error, error) {
-	args := []string{"client", serverAddr, portMapping}
-	if mux {
-		args = append(args, "-m")
-	}
-	println("Starting gnar client with path:", common.GnarPath)
-	return StartProcess(common.GnarPath, args...)
-}
-
-func StartPythonServer() (func() error, string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, "", err
+		return int(atomic.AddInt64(&fallbackPort, 1))
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
-	stopFunc, err := StartProcess("python3", "-m", "http.server", fmt.Sprintf("%d", port))
-	if err != nil {
-		return nil, "", err
-	}
-
-	return stopFunc, fmt.Sprintf("%d", port), nil
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
 }
 
-func WaitForServer(duration time.Duration) {
-	time.Sleep(duration)
+func StartProcess(t *testing.T, binary string, args ...string) context.CancelFunc {
+	t.Helper()
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = os.Environ()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start %v: %v", args, err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	return func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(os.Interrupt)
+		}
+
+		select {
+		case <-done:
+			return
+		case <-time.After(3 * time.Second):
+		}
+
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out stopping %v", args)
+		}
+	}
+}
+
+func RunCommand(t *testing.T, binary string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run %v: %v\n%s", args, err, string(output))
+	}
+	return string(output)
+}
+
+func RunCommandFailure(t *testing.T, binary string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected failure for %v\n%s", args, string(output))
+	}
+	return string(output)
+}
+
+func WaitForHTTP(t *testing.T, target string, host string) {
+	t.Helper()
+
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(10 * time.Second)
+
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequest(http.MethodGet, target, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		if host != "" {
+			req.Host = host
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for %s", fmt.Sprintf("%s host=%s", target, host))
 }

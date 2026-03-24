@@ -13,7 +13,7 @@ import (
 
 type Server struct {
 	cfg   Config
-	store *Store
+	store StoreBackend
 	http  *http.Server
 }
 
@@ -21,17 +21,19 @@ func Run(ctx context.Context, cfg Config) error {
 	return New(cfg).Run(ctx)
 }
 
-func New(cfg Config) *Server {
-	store := NewStore(cfg)
+func New(cfg Config, opts ...Option) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
 		cfg:   cfg,
-		store: store,
+		store: NewStore(cfg),
 		http: &http.Server{
 			Addr:              cfg.ListenAddr,
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
 		},
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	mux.HandleFunc("/healthz", s.handleHealth)

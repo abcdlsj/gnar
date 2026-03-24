@@ -2,10 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -15,9 +12,11 @@ import (
 )
 
 type Daemon struct {
-	mu        sync.RWMutex
-	statePath string
-	tunnels   map[string]*managedTunnel
+	mu            sync.RWMutex
+	stateStore    StateStore
+	runnerFactory RunnerFactory
+	observers     []DaemonObserver
+	tunnels       map[string]*managedTunnel
 }
 
 type managedTunnel struct {
@@ -29,27 +28,18 @@ type managedTunnel struct {
 	done   chan struct{}
 }
 
-type persistedState struct {
-	Tunnels []persistedTunnel `json:"tunnels"`
-}
-
-type persistedTunnel struct {
-	ServerURL        string        `json:"server_url"`
-	TargetURL        string        `json:"target_url"`
-	Tenant           string        `json:"tenant"`
-	Name             string        `json:"name"`
-	Domains          []string      `json:"domains"`
-	Token            string        `json:"token"`
-	RequestTimeout   time.Duration `json:"request_timeout"`
-	PollRetryBackoff time.Duration `json:"poll_retry_backoff"`
-	MaxResponseBytes int64         `json:"max_response_bytes"`
-}
-
-func NewDaemon(statePath string) *Daemon {
-	return &Daemon{
-		statePath: statePath,
-		tunnels:   make(map[string]*managedTunnel),
+func NewDaemon(statePath string, opts ...DaemonOption) *Daemon {
+	d := &Daemon{
+		stateStore: NewFileStateStore(statePath),
+		runnerFactory: func(cfg Config) RunnerService {
+			return New(cfg)
+		},
+		tunnels: make(map[string]*managedTunnel),
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
 }
 
 func (d *Daemon) Start(ctx context.Context, cfg Config) (ManagedTunnel, error) {
@@ -57,6 +47,7 @@ func (d *Daemon) Start(ctx context.Context, cfg Config) (ManagedTunnel, error) {
 	if err != nil {
 		return ManagedTunnel{}, err
 	}
+	d.notifyUpdated(cloneManaged(tunnel.state))
 
 	ready := make(chan struct{}, 1)
 	failed := make(chan error, 1)
@@ -64,10 +55,10 @@ func (d *Daemon) Start(ctx context.Context, cfg Config) (ManagedTunnel, error) {
 
 	select {
 	case <-ctx.Done():
-		_ = d.Stop(context.Background(), cfg.Tenant, cfg.Name)
+		_ = d.Stop(context.Background(), tunnel.state.Tenant, tunnel.state.Name)
 		return ManagedTunnel{}, ctx.Err()
 	case err := <-failed:
-		_ = d.Stop(context.Background(), cfg.Tenant, cfg.Name)
+		_ = d.Stop(context.Background(), tunnel.state.Tenant, tunnel.state.Name)
 		return ManagedTunnel{}, err
 	case <-ready:
 		return d.Get(cfg.Tenant, cfg.Name)
@@ -75,27 +66,17 @@ func (d *Daemon) Start(ctx context.Context, cfg Config) (ManagedTunnel, error) {
 }
 
 func (d *Daemon) Restore() error {
-	state, err := d.loadState()
+	configs, err := d.stateStore.Load()
 	if err != nil {
 		return err
 	}
 
-	for _, entry := range state.Tunnels {
-		cfg := Config{
-			ServerURL:        entry.ServerURL,
-			TargetURL:        entry.TargetURL,
-			Tenant:           entry.Tenant,
-			Name:             entry.Name,
-			Domains:          append([]string(nil), entry.Domains...),
-			Token:            entry.Token,
-			RequestTimeout:   entry.RequestTimeout,
-			PollRetryBackoff: entry.PollRetryBackoff,
-			MaxResponseBytes: entry.MaxResponseBytes,
-		}
+	for _, cfg := range configs {
 		tunnel, err := d.add(cfg)
 		if err != nil {
 			continue
 		}
+		d.notifyUpdated(cloneManaged(tunnel.state))
 		go d.runTunnel(tunnel, nil, nil, true)
 	}
 
@@ -108,8 +89,6 @@ func (d *Daemon) add(cfg Config) (*managedTunnel, error) {
 	if cfg.Name == "" {
 		return nil, errors.New("name is required")
 	}
-
-	cfg.Tenant = norm.Tenant(cfg.Tenant)
 	key := managedKey(cfg.Tenant, cfg.Name)
 
 	d.mu.Lock()
@@ -139,7 +118,7 @@ func (d *Daemon) add(cfg Config) (*managedTunnel, error) {
 		done:   make(chan struct{}),
 	}
 	d.tunnels[key] = tunnel
-	if err := d.saveLocked(); err != nil {
+	if err := d.persistLocked(); err != nil {
 		delete(d.tunnels, key)
 		cancel()
 		return nil, err
@@ -162,37 +141,37 @@ func (d *Daemon) runTunnel(tunnel *managedTunnel, ready chan<- struct{}, failed 
 	}
 
 	for {
-		err := New(tunnel.cfg).RunWithHooks(tunnel.ctx, RunnerHooks{
+		err := d.runnerFactory(tunnel.cfg).RunWithHooks(tunnel.ctx, RunnerHooks{
 			OnRegistered: func(reg *api.RegisterTunnelResponse) {
-				d.mu.Lock()
-				tunnel.state.Tenant = reg.Tenant
-				tunnel.state.PublicURL = reg.PublicURL
-				tunnel.state.URLs = append([]string(nil), reg.URLs...)
-				tunnel.state.Status = "connected"
-				tunnel.state.LastError = ""
-				tunnel.state.UpdatedAt = time.Now()
-				tunnel.state.ConnectedAt = tunnel.state.UpdatedAt
-				d.mu.Unlock()
+				d.updateTunnelState(tunnel, func(state *ManagedTunnel) {
+					state.Tenant = reg.Tenant
+					state.PublicURL = reg.PublicURL
+					state.URLs = append([]string(nil), reg.URLs...)
+					state.Status = "connected"
+					state.LastError = ""
+					state.UpdatedAt = time.Now()
+					state.ConnectedAt = state.UpdatedAt
+				})
 				notifyReady()
 			},
 			OnPollError: func(err error) {
-				d.mu.Lock()
-				tunnel.state.Status = "degraded"
-				tunnel.state.LastError = err.Error()
-				tunnel.state.UpdatedAt = time.Now()
-				d.mu.Unlock()
+				d.updateTunnelState(tunnel, func(state *ManagedTunnel) {
+					state.Status = "degraded"
+					state.LastError = err.Error()
+					state.UpdatedAt = time.Now()
+				})
 			},
 			OnStopped: func(err error) {
-				d.mu.Lock()
-				defer d.mu.Unlock()
-				if err != nil {
-					tunnel.state.Status = "failed"
-					tunnel.state.LastError = err.Error()
-				} else {
-					tunnel.state.Status = "stopped"
-					tunnel.state.LastError = ""
-				}
-				tunnel.state.UpdatedAt = time.Now()
+				d.updateTunnelState(tunnel, func(state *ManagedTunnel) {
+					if err != nil {
+						state.Status = "failed"
+						state.LastError = err.Error()
+					} else {
+						state.Status = "stopped"
+						state.LastError = ""
+					}
+					state.UpdatedAt = time.Now()
+				})
 			},
 		})
 
@@ -203,11 +182,11 @@ func (d *Daemon) runTunnel(tunnel *managedTunnel, ready chan<- struct{}, failed 
 			return
 		}
 
-		d.mu.Lock()
-		tunnel.state.Status = "failed"
-		tunnel.state.LastError = err.Error()
-		tunnel.state.UpdatedAt = time.Now()
-		d.mu.Unlock()
+		d.updateTunnelState(tunnel, func(state *ManagedTunnel) {
+			state.Status = "failed"
+			state.LastError = err.Error()
+			state.UpdatedAt = time.Now()
+		})
 
 		if !restart {
 			if failed != nil && !failureSent {
@@ -237,11 +216,13 @@ func (d *Daemon) Stop(ctx context.Context, tenant, name string) error {
 	delete(d.tunnels, key)
 	tunnel.state.Status = "stopping"
 	tunnel.state.UpdatedAt = time.Now()
-	if err := d.saveLocked(); err != nil {
+	if err := d.persistLocked(); err != nil {
 		d.mu.Unlock()
 		return err
 	}
+	stopping := cloneManaged(tunnel.state)
 	d.mu.Unlock()
+	d.notifyUpdated(stopping)
 
 	tunnel.cancel()
 
@@ -249,6 +230,7 @@ func (d *Daemon) Stop(ctx context.Context, tenant, name string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-tunnel.done:
+		d.notifyRemoved(cloneManaged(tunnel.state))
 		return nil
 	}
 }
@@ -281,72 +263,34 @@ func (d *Daemon) Get(tenant, name string) (ManagedTunnel, error) {
 	return cloneManaged(tunnel.state), nil
 }
 
-func (d *Daemon) saveLocked() error {
-	if d.statePath == "" {
-		return nil
-	}
-
-	state := persistedState{
-		Tunnels: make([]persistedTunnel, 0, len(d.tunnels)),
-	}
+func (d *Daemon) persistLocked() error {
+	configs := make([]Config, 0, len(d.tunnels))
 	for _, tunnel := range d.tunnels {
-		state.Tunnels = append(state.Tunnels, persistedTunnel{
-			ServerURL:        tunnel.cfg.ServerURL,
-			TargetURL:        tunnel.cfg.TargetURL,
-			Tenant:           tunnel.cfg.Tenant,
-			Name:             tunnel.cfg.Name,
-			Domains:          append([]string(nil), tunnel.cfg.Domains...),
-			Token:            tunnel.cfg.Token,
-			RequestTimeout:   tunnel.cfg.RequestTimeout,
-			PollRetryBackoff: tunnel.cfg.PollRetryBackoff,
-			MaxResponseBytes: tunnel.cfg.MaxResponseBytes,
-		})
+		configs = append(configs, tunnel.cfg)
 	}
-
-	sort.Slice(state.Tunnels, func(i, j int) bool {
-		if state.Tunnels[i].Tenant != state.Tunnels[j].Tenant {
-			return state.Tunnels[i].Tenant < state.Tunnels[j].Tenant
-		}
-		return state.Tunnels[i].Name < state.Tunnels[j].Name
-	})
-
-	buf, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(d.statePath), 0o755); err != nil {
-		return err
-	}
-
-	tmpPath := d.statePath + ".tmp"
-	if err := os.WriteFile(tmpPath, buf, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, d.statePath)
+	return d.stateStore.Save(configs)
 }
 
-func (d *Daemon) loadState() (persistedState, error) {
-	if d.statePath == "" {
-		return persistedState{}, nil
-	}
+func (d *Daemon) updateTunnelState(tunnel *managedTunnel, mutate func(*ManagedTunnel)) {
+	d.mu.Lock()
+	mutate(&tunnel.state)
+	state := cloneManaged(tunnel.state)
+	d.mu.Unlock()
+	d.notifyUpdated(state)
+}
 
-	buf, err := os.ReadFile(d.statePath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return persistedState{}, nil
-		}
-		return persistedState{}, err
+func (d *Daemon) notifyUpdated(state ManagedTunnel) {
+	state = cloneManaged(state)
+	for _, observer := range d.observers {
+		observer.TunnelUpdated(state)
 	}
+}
 
-	var state persistedState
-	if len(buf) == 0 {
-		return state, nil
+func (d *Daemon) notifyRemoved(state ManagedTunnel) {
+	state = cloneManaged(state)
+	for _, observer := range d.observers {
+		observer.TunnelRemoved(state)
 	}
-	if err := json.Unmarshal(buf, &state); err != nil {
-		return persistedState{}, err
-	}
-	return state, nil
 }
 
 func cloneManaged(state ManagedTunnel) ManagedTunnel {

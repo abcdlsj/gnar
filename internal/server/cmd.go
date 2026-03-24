@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/abcdlsj/gnar/internal/norm"
 	"github.com/spf13/cobra"
 )
 
@@ -18,13 +19,13 @@ func Command() *cobra.Command {
 		Use:   "server",
 		Short: "Run the public edge and control plane",
 		PreRunE: func(cmd *cobra.Command, args []string) error {
-			cfg.AllowedDomainSuffixes = normalizeSuffixes(allowedDomainSuffixes)
+			cfg.AllowedDomainSuffixes = norm.Suffixes(allowedDomainSuffixes)
 			for _, item := range agentCredentials {
 				tenant, token, ok := strings.Cut(item, "=")
 				if !ok {
 					return fmt.Errorf("invalid agent credential: %s", item)
 				}
-				tenant = normalizeTenant(tenant)
+				tenant = norm.Tenant(tenant)
 				token = strings.TrimSpace(token)
 				if token == "" {
 					return fmt.Errorf("invalid agent credential: %s", item)
@@ -36,8 +37,8 @@ func Command() *cobra.Command {
 				if !ok {
 					return fmt.Errorf("invalid tenant domain suffix: %s", item)
 				}
-				tenant = normalizeTenant(tenant)
-				normalized := normalizeSuffixes([]string{suffix})
+				tenant = norm.Tenant(tenant)
+				normalized := norm.Suffixes([]string{suffix})
 				if len(normalized) == 0 {
 					return fmt.Errorf("invalid tenant domain suffix: %s", item)
 				}

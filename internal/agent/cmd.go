@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/abcdlsj/gnar/internal/norm"
 	"github.com/spf13/cobra"
 )
 
@@ -136,7 +137,7 @@ func StopCommand() *cobra.Command {
 			if err := NewDaemonClient(daemonURL).Stop(ctx, tenant, args[0]); err != nil {
 				return err
 			}
-			fmt.Printf("stopped %s/%s\n", normalizeTenant(tenant), args[0])
+			fmt.Printf("stopped %s/%s\n", norm.Tenant(tenant), args[0])
 			return nil
 		},
 	}

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/abcdlsj/gnar/internal/norm"
 )
 
 type Config struct {
@@ -80,5 +82,5 @@ func defaultName() string {
 	if name == "" || name == "." || name == "/" {
 		return "tunnel"
 	}
-	return name
+	return norm.Name(name)
 }

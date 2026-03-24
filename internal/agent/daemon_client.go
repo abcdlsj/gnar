@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/abcdlsj/gnar/internal/norm"
 )
 
 type DaemonClient struct {
@@ -48,7 +50,7 @@ func (c *DaemonClient) List(ctx context.Context) ([]ManagedTunnel, error) {
 }
 
 func (c *DaemonClient) Stop(ctx context.Context, tenant, name string) error {
-	path := "/api/v1/tunnels/" + url.PathEscape(name) + "?tenant=" + url.QueryEscape(normalizeTenant(tenant))
+	path := "/api/v1/tunnels/" + url.PathEscape(name) + "?tenant=" + url.QueryEscape(norm.Tenant(tenant))
 	httpReq, err := c.newRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return err

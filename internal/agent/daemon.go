@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abcdlsj/gnar/internal/norm"
 	"github.com/abcdlsj/gnar/pkg/api"
 )
 
@@ -102,13 +103,13 @@ func (d *Daemon) Restore() error {
 }
 
 func (d *Daemon) add(cfg Config) (*managedTunnel, error) {
-	cfg.Tenant = normalizeTenant(cfg.Tenant)
-	cfg.Name = normalizeName(cfg.Name)
+	cfg.Tenant = norm.Tenant(cfg.Tenant)
+	cfg.Name = norm.Name(cfg.Name)
 	if cfg.Name == "" {
 		return nil, errors.New("name is required")
 	}
 
-	cfg.Tenant = normalizeTenant(cfg.Tenant)
+	cfg.Tenant = norm.Tenant(cfg.Tenant)
 	key := managedKey(cfg.Tenant, cfg.Name)
 
 	d.mu.Lock()
@@ -225,7 +226,7 @@ func (d *Daemon) runTunnel(tunnel *managedTunnel, ready chan<- struct{}, failed 
 }
 
 func (d *Daemon) Stop(ctx context.Context, tenant, name string) error {
-	key := managedKey(normalizeTenant(tenant), normalizeName(name))
+	key := managedKey(norm.Tenant(tenant), norm.Name(name))
 
 	d.mu.Lock()
 	tunnel, ok := d.tunnels[key]
@@ -273,7 +274,7 @@ func (d *Daemon) Get(tenant, name string) (ManagedTunnel, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	tunnel, ok := d.tunnels[managedKey(normalizeTenant(tenant), normalizeName(name))]
+	tunnel, ok := d.tunnels[managedKey(norm.Tenant(tenant), norm.Name(name))]
 	if !ok {
 		return ManagedTunnel{}, errors.New("tunnel not found")
 	}
@@ -355,5 +356,5 @@ func cloneManaged(state ManagedTunnel) ManagedTunnel {
 }
 
 func managedKey(tenant, name string) string {
-	return normalizeTenant(tenant) + "/" + normalizeName(name)
+	return norm.Key(tenant, name)
 }

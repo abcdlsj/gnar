@@ -35,8 +35,8 @@ func NewListCommand() *cobra.Command {
 		Use:   "ls",
 		Short: "List active tunnels",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := newManageClient(cfg.ServerURL, cfg.Token)
-			response, err := client.List(cmd.Context(), cfg.Tenant)
+			client := api.NewClient(cfg.ServerURL, cfg.Token)
+			response, err := client.ListTunnels(cmd.Context(), cfg.Tenant)
 			if err != nil {
 				return err
 			}
@@ -58,8 +58,8 @@ func NewInspectCommand() *cobra.Command {
 		Short: "Inspect a tunnel",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := newManageClient(cfg.ServerURL, cfg.Token)
-			response, err := client.Detail(cmd.Context(), cfg.Tenant, args[0])
+			client := api.NewClient(cfg.ServerURL, cfg.Token)
+			response, err := client.TunnelDetail(cmd.Context(), cfg.Tenant, args[0])
 			if err != nil {
 				return err
 			}
@@ -82,8 +82,8 @@ func NewLogsCommand() *cobra.Command {
 		Short: "Show recent requests for a tunnel",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := newManageClient(cfg.ServerURL, cfg.Token)
-			response, err := client.Logs(cmd.Context(), cfg.Tenant, args[0], limit)
+			client := api.NewClient(cfg.ServerURL, cfg.Token)
+			response, err := client.TunnelLogs(cmd.Context(), cfg.Tenant, args[0], limit)
 			if err != nil {
 				return err
 			}
@@ -109,7 +109,7 @@ func NewDoctorCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var checks []string
 			client := &http.Client{Timeout: timeout}
-			if err := checkServer(client, cfg.ServerURL, cfg.Token); err != nil {
+			if err := checkServer(timeout, cfg.ServerURL, cfg.Token); err != nil {
 				checks = append(checks, "server: fail ("+err.Error()+")")
 			} else {
 				checks = append(checks, "server: ok")
@@ -141,108 +141,6 @@ func NewDoctorCommand() *cobra.Command {
 	addManageFlags(cmd, &cfg)
 	cmd.Flags().DurationVar(&timeout, "timeout", timeout, "request timeout")
 	return cmd
-}
-
-type manageClient struct {
-	serverURL string
-	token     string
-	http      *http.Client
-}
-
-func newManageClient(serverURL, token string) *manageClient {
-	return &manageClient{
-		serverURL: serverURL,
-		token:     token,
-		http:      &http.Client{Timeout: 5 * time.Second},
-	}
-}
-
-func (c *manageClient) List(ctx context.Context, tenant string) (api.ListTunnelsResponse, error) {
-	path := "/api/v1/tunnels"
-	if tenant != "" {
-		path += "?tenant=" + url.QueryEscape(tenant)
-	}
-	req, err := c.newRequest(ctx, http.MethodGet, path)
-	if err != nil {
-		return api.ListTunnelsResponse{}, err
-	}
-	var response api.ListTunnelsResponse
-	err = c.do(req, &response)
-	return response, err
-}
-
-func (c *manageClient) Detail(ctx context.Context, tenant, name string) (api.TunnelDetailResponse, error) {
-	path := "/api/v1/tunnels/" + url.PathEscape(name)
-	if tenant != "" {
-		path += "?tenant=" + url.QueryEscape(tenant)
-	}
-	req, err := c.newRequest(ctx, http.MethodGet, path)
-	if err != nil {
-		return api.TunnelDetailResponse{}, err
-	}
-	var response api.TunnelDetailResponse
-	err = c.do(req, &response)
-	return response, err
-}
-
-func (c *manageClient) Logs(ctx context.Context, tenant, name string, limit int) (api.TunnelDetailResponse, error) {
-	query := "limit=" + strconv.Itoa(limit)
-	if tenant != "" {
-		query += "&tenant=" + url.QueryEscape(tenant)
-	}
-	path := "/api/v1/tunnels/" + url.PathEscape(name) + "/logs?" + query
-	req, err := c.newRequest(ctx, http.MethodGet, path)
-	if err != nil {
-		return api.TunnelDetailResponse{}, err
-	}
-	var raw struct {
-		Tunnel   api.TunnelSummary     `json:"tunnel"`
-		Requests []api.RequestLogEntry `json:"requests"`
-	}
-	if err := c.do(req, &raw); err != nil {
-		return api.TunnelDetailResponse{}, err
-	}
-	return api.TunnelDetailResponse{
-		Tunnel:         raw.Tunnel,
-		RecentRequests: raw.Requests,
-	}, nil
-}
-
-func (c *manageClient) do(req *http.Request, out any) error {
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		var payload api.ErrorResponse
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload.Error != "" {
-			return fmt.Errorf(payload.Error)
-		}
-		return fmt.Errorf("unexpected status: %s", resp.Status)
-	}
-
-	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func (c *manageClient) newRequest(ctx context.Context, method, endpoint string) (*http.Request, error) {
-	base, err := url.Parse(c.serverURL)
-	if err != nil {
-		return nil, err
-	}
-	relative, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, method, base.ResolveReference(relative).String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	return req, nil
 }
 
 func addManageFlags(cmd *cobra.Command, cfg *manageConfig) {
@@ -343,27 +241,10 @@ func normalizeDoctorTarget(value string) (string, error) {
 	return parsed.String(), nil
 }
 
-func checkServer(client *http.Client, serverURL, token string) error {
-	base, err := url.Parse(serverURL)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodGet, base.ResolveReference(&url.URL{Path: "/healthz"}).String(), nil)
-	if err != nil {
-		return err
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server health returned %s", resp.Status)
-	}
-	return nil
+func checkServer(timeout time.Duration, serverURL, token string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return api.NewClient(serverURL, token).Health(ctx)
 }
 
 func checkLocal(client *http.Client, target string) error {

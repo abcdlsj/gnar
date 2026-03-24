@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"path"
 	"sort"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abcdlsj/gnar/internal/norm"
 	"github.com/abcdlsj/gnar/pkg/api"
 )
 
@@ -71,8 +71,8 @@ func (s *Store) Register(req api.RegisterTunnelRequest) (*api.RegisterTunnelResp
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tenant := normalizeTenant(req.Tenant)
-	name := normalizeName(req.Name)
+	tenant := norm.Tenant(req.Tenant)
+	name := norm.Name(req.Name)
 	if name == "" {
 		name = "tunnel"
 	}
@@ -84,12 +84,12 @@ func (s *Store) Register(req api.RegisterTunnelRequest) (*api.RegisterTunnelResp
 	}
 
 	slug := s.nextSlug(tenant, name)
-	domains := normalizeDomains(req.Domains)
+	domains := norm.Domains(req.Domains)
 	if err := validateDomains(domains, tenant, s.cfg); err != nil {
 		return nil, err
 	}
 	if len(domains) == 0 && s.cfg.BaseDomain != "" {
-		domains = []string{slug + "." + normalizeHost(s.cfg.BaseDomain)}
+		domains = []string{slug + "." + norm.Host(s.cfg.BaseDomain)}
 	}
 
 	for _, domain := range domains {
@@ -154,7 +154,7 @@ func (s *Store) Resolve(host, requestPath string) (*Tunnel, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if tunnelID, ok := s.byHost[normalizeHost(host)]; ok {
+	if tunnelID, ok := s.byHost[norm.Host(host)]; ok {
 		tunnel := s.byID[tunnelID]
 		if tunnel == nil {
 			return nil, "", errors.New("tunnel not found")
@@ -428,7 +428,7 @@ func (s *Store) Detail(tenant, ref string) (api.TunnelDetailResponse, error) {
 }
 
 func (s *Store) findTunnelLocked(tenant, ref string) *Tunnel {
-	ref = normalizeName(ref)
+	ref = norm.Name(ref)
 	if ref == "" {
 		return nil
 	}
@@ -440,7 +440,7 @@ func (s *Store) findTunnelLocked(tenant, ref string) *Tunnel {
 	}
 
 	if tenant != "" {
-		key := normalizeTenant(tenant) + "/" + ref
+		key := norm.Tenant(tenant) + "/" + ref
 		if tunnelID, ok := s.bySlug[key]; ok {
 			return s.byID[tunnelID]
 		}
@@ -516,110 +516,7 @@ func extractTenantSlug(requestPath string) (string, string, string, bool) {
 		forwardedPath = "/" + parts[3]
 	}
 
-	return normalizeTenant(parts[1]), parts[2], forwardedPath, true
-}
-
-func normalizeName(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return ""
-	}
-
-	var b strings.Builder
-	lastDash := false
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-			lastDash = false
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-			lastDash = false
-		default:
-			if lastDash || b.Len() == 0 {
-				continue
-			}
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-
-	name := strings.Trim(b.String(), "-")
-	if name == "" {
-		return ""
-	}
-	return name
-}
-
-func normalizeTenant(value string) string {
-	value = normalizeName(value)
-	if value == "" {
-		return "default"
-	}
-	return value
-}
-
-func normalizeHost(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return ""
-	}
-
-	if strings.Contains(value, "://") {
-		parsed, err := url.Parse(value)
-		if err == nil {
-			value = parsed.Host
-		}
-	}
-
-	if host, _, err := net.SplitHostPort(value); err == nil {
-		return host
-	}
-
-	if strings.Count(value, ":") == 1 {
-		host, _, _ := strings.Cut(value, ":")
-		return host
-	}
-
-	return value
-}
-
-func normalizeDomains(domains []string) []string {
-	seen := make(map[string]struct{})
-	result := make([]string, 0, len(domains))
-	for _, domain := range domains {
-		normalized := normalizeHost(domain)
-		if normalized == "" {
-			continue
-		}
-		if _, exists := seen[normalized]; exists {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		result = append(result, normalized)
-	}
-	return result
-}
-
-func normalizeSuffixes(values []string) []string {
-	seen := make(map[string]struct{})
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(strings.ToLower(value))
-		value = strings.TrimPrefix(value, "*.")
-		if value == "" {
-			continue
-		}
-		if !strings.HasPrefix(value, ".") {
-			value = "." + value
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
+	return norm.Tenant(parts[1]), parts[2], forwardedPath, true
 }
 
 func validateDomains(domains []string, tenant string, cfg Config) error {
@@ -649,7 +546,7 @@ func validateDomains(domains []string, tenant string, cfg Config) error {
 }
 
 func domainHasSuffix(domain, suffix string) bool {
-	domain = strings.TrimSpace(strings.ToLower(domain))
+	domain = norm.Host(domain)
 	suffix = strings.TrimSpace(strings.ToLower(suffix))
 	if domain == "" || suffix == "" {
 		return false

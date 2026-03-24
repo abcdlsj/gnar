@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/abcdlsj/gnar/internal/norm"
 )
 
 type DaemonServer struct {
@@ -116,7 +118,7 @@ func (s *DaemonServer) handleTunnelByName(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	tenant := normalizeTenant(r.URL.Query().Get("tenant"))
+	tenant := norm.Tenant(r.URL.Query().Get("tenant"))
 
 	switch r.Method {
 	case http.MethodGet:

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/abcdlsj/gnar/internal/norm"
 	"github.com/abcdlsj/gnar/pkg/api"
 )
 
@@ -25,7 +26,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req.Tenant = normalizeTenant(req.Tenant)
+	req.Tenant = norm.Tenant(req.Tenant)
 	if !s.authorizeAgent(req.Tenant, req.Token) {
 		writeError(w, http.StatusUnauthorized, "invalid token")
 		return
@@ -180,7 +181,7 @@ func (s *Server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 
 	tenant := ""
 	if value := r.URL.Query().Get("tenant"); value != "" {
-		tenant = normalizeTenant(value)
+		tenant = norm.Tenant(value)
 	}
 	writeJSON(w, http.StatusOK, api.ListTunnelsResponse{Tunnels: s.store.List(tenant)})
 }
@@ -205,7 +206,7 @@ func (s *Server) handleTunnelByName(w http.ResponseWriter, r *http.Request) {
 	ref = parts[0]
 	tenant := ""
 	if value := r.URL.Query().Get("tenant"); value != "" {
-		tenant = normalizeTenant(value)
+		tenant = norm.Tenant(value)
 	}
 
 	detail, err := s.store.Detail(tenant, ref)
@@ -322,13 +323,7 @@ func (s *Server) authorizeManage(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
-	provided := r.URL.Query().Get("token")
-	if provided == "" {
-		header := r.Header.Get("Authorization")
-		if strings.HasPrefix(header, "Bearer ") {
-			provided = strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-		}
-	}
+	provided := api.TokenFromRequest(r)
 
 	if provided != token {
 		writeError(w, http.StatusUnauthorized, "invalid token")

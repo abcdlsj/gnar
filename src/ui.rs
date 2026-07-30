@@ -1071,9 +1071,9 @@ fn pad(area: Rect) -> Rect {
 
 fn draw_header(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect) {
     let (mark, label, color) = if dashboard.online {
-        ("●", "online", ACCENT)
+        ("●", "ONLINE", ACCENT)
     } else {
-        ("◌", "reconnecting", Color::Yellow)
+        ("◌", "RECONNECTING", Color::Yellow)
     };
     let left = Line::from(vec![
         Span::styled(
@@ -1091,7 +1091,7 @@ fn draw_header(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
     frame.render_widget(Paragraph::new(left), area);
     frame.render_widget(
         Paragraph::new(Line::styled(
-            format!("{per_minute}/min · {} captured", dashboard.exchanges.len()),
+            format!("{per_minute}/min · {} CAPTURED", dashboard.exchanges.len()),
             Style::default().fg(MUTED),
         ))
         .right_aligned(),
@@ -1131,9 +1131,9 @@ fn rule<'a>(title: &str, detail: String) -> Block<'a> {
 fn draw_requests(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect) {
     let visible = dashboard.visible_exchanges();
     let detail = if dashboard.following {
-        "following".to_string()
+        "FOLLOWING".to_string()
     } else {
-        format!("held · {} of {}", dashboard.selected + 1, visible.len())
+        format!("HELD · {} OF {}", dashboard.selected + 1, visible.len())
     };
     let block = rule("REQUESTS", detail);
     if visible.is_empty() {
@@ -1275,7 +1275,7 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
     if dashboard.filter_editing {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("filter ", Style::default().fg(MUTED)),
+                Span::styled("FILTER ", Style::default().fg(MUTED)),
                 Span::styled(
                     format!("{}▌", dashboard.filter),
                     Style::default().fg(ACCENT),
@@ -1919,7 +1919,9 @@ mod tests {
         let screen = render(&dashboard);
 
         assert!(screen.contains("gnar"));
-        assert!(screen.contains("online"));
+        assert!(screen.contains("ONLINE"));
+        assert!(screen.contains("CAPTURED"));
+        assert!(screen.contains("FOLLOWING"));
         assert!(screen.contains("https://example.test"));
         assert!(screen.contains("http://127.0.0.1:3000"));
         assert!(screen.contains("/api/users"));
@@ -1965,7 +1967,7 @@ mod tests {
         dashboard.online = false;
         dashboard.notice = Some(super::Notice::sticky("edge disconnected, reconnecting"));
         let screen = render(&dashboard);
-        assert!(screen.contains("reconnecting"));
+        assert!(screen.contains("RECONNECTING"));
 
         dashboard.filter = "nothing".into();
         let screen = render(&dashboard);

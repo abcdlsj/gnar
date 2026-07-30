@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+use anstyle::{AnsiColor, Color as AnsiStyleColor, Style as AnsiStyle};
 use base64::Engine;
 use crossterm::event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
@@ -27,6 +28,20 @@ const MAX_CAPTURE_BYTES: usize = 64 * 1024;
 const NOTICE_LIFETIME: Duration = Duration::from_secs(3);
 const HEARTBEAT: Duration = Duration::from_secs(1);
 const BODY_PAGE: i16 = 8;
+
+const PROMPT_SUCCESS: AnsiStyle =
+    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::Green)));
+const PROMPT_ACCENT: AnsiStyle = AnsiStyle::new()
+    .fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::Green)))
+    .bold();
+const PROMPT_MUTED: AnsiStyle =
+    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::BrightBlack)));
+const PROMPT_FADED: AnsiStyle = AnsiStyle::new()
+    .fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::BrightBlack)))
+    .dimmed();
+const PROMPT_ORIGIN: AnsiStyle =
+    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::Cyan)));
+const PROMPT_BOLD: AnsiStyle = AnsiStyle::new().bold();
 
 const ACCENT: Color = Color::Rgb(126, 231, 135);
 const LINK: Color = Color::Rgb(121, 192, 255);
@@ -185,14 +200,14 @@ fn edge_lines(edges: &[String], view: &View) -> Vec<String> {
             let fade = (index == view.offset && view.hidden_above() > 0)
                 || (index + 1 == view.offset + view.height && view.hidden_below() > 0);
             if fade {
-                format!("  \x1b[2;90m{number} {}\x1b[0m", edges[index])
+                format!("  {PROMPT_FADED}{number} {}{PROMPT_FADED:#}", edges[index])
             } else if index == view.selected {
                 format!(
-                    "\x1b[32m›\x1b[0m \x1b[90m{number}\x1b[0m \x1b[1;32m{}\x1b[0m",
+                    "{PROMPT_SUCCESS}›{PROMPT_SUCCESS:#} {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {PROMPT_ACCENT}{}{PROMPT_ACCENT:#}",
                     edges[index]
                 )
             } else {
-                format!("  \x1b[90m{number}\x1b[0m {}", edges[index])
+                format!("  {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {}", edges[index])
             }
         })
         .collect()
@@ -228,7 +243,7 @@ fn finish_edge_prompt(
     match choice {
         Some(selected) => writeln!(
             writer,
-            "\x1b[32m✓\x1b[0m Edge  \x1b[36m{}\x1b[0m",
+            "{PROMPT_SUCCESS}✓{PROMPT_SUCCESS:#} Edge  {PROMPT_ORIGIN}{}{PROMPT_ORIGIN:#}",
             edges[selected]
         )?,
         None => writeln!(writer, "Cancelled")?,
@@ -295,7 +310,7 @@ impl View {
         let mut hint = format!("  ↑↓ select · 1-{jump} jump · enter publish · esc cancel");
         if self.scrolls() {
             hint.push_str(&format!(
-                "\x1b[90m · {} of {}\x1b[0m",
+                "{PROMPT_MUTED} · {} of {}{PROMPT_MUTED:#}",
                 self.selected + 1,
                 self.total
             ));
@@ -383,13 +398,16 @@ pub fn choose_login_setup(generated: &str) -> io::Result<LoginSetup> {
             collapse(&mut stderr)?;
             writeln!(
                 stderr,
-                "\x1b[32m✓\x1b[0m Anyone may publish  \x1b[90mno accounts\x1b[0m"
+                "{PROMPT_SUCCESS}✓{PROMPT_SUCCESS:#} Anyone may publish  {PROMPT_MUTED}no accounts{PROMPT_MUTED:#}"
             )?;
             Ok(LoginSetup::Anonymous)
         }
         Some(_) => {
             collapse(&mut stderr)?;
-            writeln!(stderr, "\x1b[32m✓\x1b[0m Require an account")?;
+            writeln!(
+                stderr,
+                "{PROMPT_SUCCESS}✓{PROMPT_SUCCESS:#} Require an account"
+            )?;
             let secret = read_secret(&mut stderr, generated)?;
             match secret {
                 Some(secret) => Ok(LoginSetup::Secret(secret)),
@@ -406,17 +424,19 @@ fn choice_row(index: usize, title: &str, detail: &str, selected: bool) -> String
     let number = index + 1;
     if selected {
         format!(
-            "\x1b[32m›\x1b[0m \x1b[90m{number}\x1b[0m \x1b[1;32m{title:<20}\x1b[0m  \x1b[90m{detail}\x1b[0m"
+            "{PROMPT_SUCCESS}›{PROMPT_SUCCESS:#} {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {PROMPT_ACCENT}{title:<20}{PROMPT_ACCENT:#}  {PROMPT_MUTED}{detail}{PROMPT_MUTED:#}"
         )
     } else {
-        format!("  \x1b[90m{number}\x1b[0m {title:<20}  \x1b[90m{detail}\x1b[0m")
+        format!(
+            "  {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {title:<20}  {PROMPT_MUTED}{detail}{PROMPT_MUTED:#}"
+        )
     }
 }
 
 fn read_secret(writer: &mut io::Stderr, generated: &str) -> io::Result<Option<String>> {
     write!(
         writer,
-        "  Approval secret \x1b[90m(enter to generate one)\x1b[0m\n  › "
+        "  Approval secret {PROMPT_MUTED}(enter to generate one){PROMPT_MUTED:#}\n  › "
     )?;
     writer.flush()?;
 
@@ -453,8 +473,8 @@ fn read_secret(writer: &mut io::Stderr, generated: &str) -> io::Result<Option<St
     let secret = if typed.trim().is_empty() {
         writeln!(
             writer,
-            "  \x1b[90mgenerated\x1b[0m  \x1b[1m{generated}\x1b[0m\n  \x1b[90mSave it now; \
-             this edge will not show it again.\x1b[0m"
+            "  {PROMPT_MUTED}generated{PROMPT_MUTED:#}  {PROMPT_BOLD}{generated}{PROMPT_BOLD:#}\n  {PROMPT_MUTED}Save it now; \
+             this edge will not show it again.{PROMPT_MUTED:#}"
         )?;
         generated.to_string()
     } else {
@@ -505,25 +525,28 @@ fn prompt_header(count: usize) -> String {
 fn prompt_row(row: &ServiceRow, index: usize, width: usize, selected: bool, fade: bool) -> String {
     let number = format!("{:>width$}", index + 1, width = width);
     if fade {
-        let mut line = format!("  \x1b[2;90m{number} {}  {:>6}", row.kind, row.origin);
+        let mut line = format!("  {PROMPT_FADED}{number} {}  {:>6}", row.kind, row.origin);
         if !row.detail.is_empty() {
             line.push_str(&format!("  {}", row.detail));
         }
-        line.push_str("\x1b[0m");
+        line.push_str(&format!("{PROMPT_FADED:#}"));
         return line;
     }
 
     let mut line = if selected {
         format!(
-            "\x1b[32m›\x1b[0m \x1b[90m{number}\x1b[0m \x1b[1;32m{}\x1b[0m",
+            "{PROMPT_SUCCESS}›{PROMPT_SUCCESS:#} {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {PROMPT_ACCENT}{}{PROMPT_ACCENT:#}",
             row.kind
         )
     } else {
-        format!("  \x1b[90m{number}\x1b[0m {}", row.kind)
+        format!("  {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {}", row.kind)
     };
-    line.push_str(&format!("  \x1b[36m{:>6}\x1b[0m", row.origin));
+    line.push_str(&format!(
+        "  {PROMPT_ORIGIN}{:>6}{PROMPT_ORIGIN:#}",
+        row.origin
+    ));
     if !row.detail.is_empty() {
-        line.push_str(&format!("  \x1b[90m{}\x1b[0m", row.detail));
+        line.push_str(&format!("  {PROMPT_MUTED}{}{PROMPT_MUTED:#}", row.detail));
     }
     line
 }
@@ -553,7 +576,7 @@ fn finish_prompt(
             let row = &rows[selected];
             writeln!(
                 writer,
-                "\x1b[32m✓\x1b[0m {}  \x1b[36m{}\x1b[0m",
+                "{PROMPT_SUCCESS}✓{PROMPT_SUCCESS:#} {}  {PROMPT_ORIGIN}{}{PROMPT_ORIGIN:#}",
                 row.kind.trim_end(),
                 row.origin
             )?;
@@ -1465,11 +1488,11 @@ mod tests {
         let first = edge_lines(&edges, &view);
         assert_eq!(first.len(), 7);
         assert!(first[0].contains("edge-1.example.com"));
-        assert!(first[6].contains("\x1b[2;90m"));
+        assert!(first[6].contains(&super::PROMPT_FADED.to_string()));
 
         view.select(7);
         let last = edge_lines(&edges, &view);
-        assert!(last[0].contains("\x1b[2;90m"));
+        assert!(last[0].contains(&super::PROMPT_FADED.to_string()));
         assert!(last[6].contains("edge-8.example.com"));
     }
 
@@ -1677,7 +1700,7 @@ mod tests {
         let account = super::choice_row(1, "Require an account", "accounts", false);
 
         assert!(anonymous.contains('›'));
-        assert!(anonymous.contains("\x1b[1;32m"));
+        assert!(anonymous.contains(&super::PROMPT_ACCENT.to_string()));
         assert!(!account.contains('›'));
         assert!(account.contains('2'));
     }
@@ -1736,13 +1759,14 @@ mod tests {
         let mut view = super::View::new(rows.len());
 
         let lines = view.lines(&rows);
-        assert!(!lines[0].contains("\x1b[2;90m"), "nothing hidden above");
-        assert!(lines[super::MAX_VISIBLE - 1].contains("\x1b[2;90m"));
+        let faded = super::PROMPT_FADED.to_string();
+        assert!(!lines[0].contains(&faded), "nothing hidden above");
+        assert!(lines[super::MAX_VISIBLE - 1].contains(&faded));
 
         view.select(9);
         let lines = view.lines(&rows);
-        assert!(lines[0].contains("\x1b[2;90m"), "rows hidden above");
-        assert!(!lines[super::MAX_VISIBLE - 1].contains("\x1b[2;90m"));
+        assert!(lines[0].contains(&faded), "rows hidden above");
+        assert!(!lines[super::MAX_VISIBLE - 1].contains(&faded));
     }
 
     #[test]

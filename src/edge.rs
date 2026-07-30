@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -17,6 +19,9 @@ use rand::Rng;
 use serde::Deserialize;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::key_extractor::{GlobalKeyExtractor, SmartIpKeyExtractor};
+use tower_governor::{GovernorError, GovernorLayer};
 
 use crate::app::AppError;
 use crate::cli::{Quota, ServeArgs};
@@ -31,6 +36,7 @@ const MAX_HEADERS: usize = 128;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_CONCURRENT_EXCHANGES: usize = 64;
 const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub struct Edge {
     config: ServeArgs,
@@ -44,6 +50,7 @@ struct EdgeState {
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     store: Store,
     next_request: Arc<AtomicU64>,
+    anonymous_tunnels: Arc<Semaphore>,
 }
 
 struct Session {
@@ -55,6 +62,7 @@ struct Session {
     endpoint_id: i64,
     requests_per_minute: u32,
     store: Store,
+    _tunnel_permit: Option<OwnedSemaphorePermit>,
 }
 
 struct Pending {
@@ -102,18 +110,58 @@ impl Edge {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             store,
             next_request: Arc::new(AtomicU64::new(1)),
+            anonymous_tunnels: Arc::new(Semaphore::new(config.anonymous_tunnels)),
             config: config.clone(),
         };
+        let mut source_limit = GovernorConfigBuilder::default();
+        source_limit.per_second(10).burst_size(6);
+        let source_limit = Arc::new(
+            source_limit
+                .key_extractor(SmartIpKeyExtractor)
+                .finish()
+                .expect("valid device source rate limit"),
+        );
+        let source_limiter = source_limit.limiter().clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(CLEANUP_INTERVAL).await;
+                source_limiter.retain_recent();
+            }
+        });
+        let mut global_limit = GovernorConfigBuilder::default();
+        global_limit.per_second(1).burst_size(60);
+        let global_limit = Arc::new(
+            global_limit
+                .key_extractor(GlobalKeyExtractor)
+                .finish()
+                .expect("valid global device rate limit"),
+        );
+        let limited_device_code = post(request_device_code)
+            .layer::<_, Infallible>(
+                GovernorLayer::new(global_limit.clone()).error_handler(device_rate_limited),
+            )
+            .layer::<_, Infallible>(
+                GovernorLayer::new(source_limit.clone()).error_handler(device_rate_limited),
+            );
+        let limited_device_approval = post(approve_device_page)
+            .layer::<_, Infallible>(
+                GovernorLayer::new(global_limit).error_handler(device_rate_limited),
+            )
+            .layer::<_, Infallible>(
+                GovernorLayer::new(source_limit).error_handler(device_rate_limited),
+            );
+        let cleanup_store = state.store.clone();
         let app = Router::new()
             .route("/healthz", get(|| async { "ok" }))
             .route("/v1/tunnels", get(open_tunnel))
-            .route("/v1/device/code", post(request_device_code))
+            .route("/v1/device/code", limited_device_code)
             .route("/v1/device/token", post(redeem_device_code))
             .route("/v1/account", get(describe_account))
             .route("/v1/endpoints/release", post(release_endpoint))
-            .route("/device", get(device_page).post(approve_device_page))
+            .route("/device", get(device_page).merge(limited_device_approval))
             .fallback(forward_public)
             .with_state(state);
+        tokio::spawn(cleanup_loop(cleanup_store));
         let listener = tokio::net::TcpListener::bind(config.listen)
             .await
             .map_err(|error| AppError::Edge(error.to_string()))?;
@@ -130,10 +178,13 @@ impl Edge {
             Some(_) => println!("  login    accounts require the approval secret at /device"),
             None => println!("  login    disabled, this edge serves anonymous tunnels only"),
         }
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|error| AppError::Edge(error.to_string()))
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(|error| AppError::Edge(error.to_string()))
     }
 }
 
@@ -160,6 +211,21 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
+async fn cleanup_loop(store: Store) {
+    loop {
+        tokio::time::sleep(CLEANUP_INTERVAL).await;
+        match store.cleanup().await {
+            Ok(stats) => tracing::debug!(
+                device_authorizations = stats.device_authorizations,
+                endpoints = stats.endpoints,
+                sessions = stats.sessions,
+                "cleaned expired edge state"
+            ),
+            Err(error) => tracing::error!(%error, "could not clean expired edge state"),
+        }
+    }
+}
+
 async fn open_tunnel(
     websocket: WebSocketUpgrade,
     State(state): State<EdgeState>,
@@ -172,6 +238,7 @@ struct Granted {
     endpoint_id: i64,
     session_id: i64,
     quota: Quota,
+    tunnel_permit: Option<OwnedSemaphorePermit>,
 }
 
 async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted> {
@@ -188,6 +255,7 @@ async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted>
         Some(token) => match state.store.account_for_token(token).await {
             Ok(Some(account)) => Some(account),
             Ok(None) => {
+                tracing::warn!("rejected tunnel with an unknown account token");
                 reject(
                     socket,
                     "this edge does not recognize the stored token; run `gnar login` again",
@@ -195,25 +263,64 @@ async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted>
                 .await;
                 return None;
             }
-            Err(_) => return None,
+            Err(error) => {
+                tracing::error!(%error, "could not validate an account token");
+                return None;
+            }
         },
+        None if state.config.approval_secret.is_some() => {
+            tracing::warn!("rejected unauthenticated tunnel on an account-only edge");
+            reject(
+                socket,
+                "this edge requires an account; run `gnar login --edge <url>` first",
+            )
+            .await;
+            return None;
+        }
         None => None,
     };
 
+    let tunnel_permit = if account.is_none() {
+        match state.anonymous_tunnels.clone().try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                tracing::warn!("rejected anonymous tunnel because its limit is exhausted");
+                reject(
+                    socket,
+                    &format!(
+                        "this edge already has {} anonymous tunnels open; stop one and try again",
+                        state.config.anonymous_tunnels
+                    ),
+                )
+                .await;
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+
     let quota = state.config.quota(account.is_some());
-    if let Some(account) = &account
-        && let Ok(live) = state.store.count_live_tunnels(account.id).await
-        && live >= quota.tunnels
-    {
-        reject(
-            socket,
-            &format!(
-                "account {} already has {live} of {} tunnels open; stop one and try again",
-                account.name, quota.tunnels
-            ),
-        )
-        .await;
-        return None;
+    if let Some(account) = &account {
+        match state.store.count_live_tunnels(account.id).await {
+            Ok(live) if live >= quota.tunnels => {
+                tracing::warn!(account = %account.name, "rejected tunnel because its account limit is exhausted");
+                reject(
+                    socket,
+                    &format!(
+                        "account {} already has {live} of {} tunnels open; stop one and try again",
+                        account.name, quota.tunnels
+                    ),
+                )
+                .await;
+                return None;
+            }
+            Err(error) => {
+                tracing::error!(%error, "could not check the account tunnel limit");
+                return None;
+            }
+            _ => {}
+        }
     }
 
     let name = match open.name {
@@ -245,9 +352,18 @@ async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted>
             .await;
             return None;
         }
-        Err(_) => return None,
+        Err(error) => {
+            tracing::error!(%error, "could not claim an endpoint");
+            return None;
+        }
     };
-    let session_id = state.store.open_session(endpoint_id).await.ok()?;
+    let session_id = match state.store.open_session(endpoint_id).await {
+        Ok(session_id) => session_id,
+        Err(error) => {
+            tracing::error!(%error, "could not persist a tunnel session");
+            return None;
+        }
+    };
 
     let opened = protocol::encode(&protocol::OpenResult::Opened(TunnelOpened {
         version: protocol::VERSION,
@@ -264,6 +380,7 @@ async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted>
         endpoint_id,
         session_id,
         quota,
+        tunnel_permit,
     })
 }
 
@@ -276,6 +393,7 @@ async fn serve_tunnel(mut socket: WebSocket, state: EdgeState) {
         endpoint_id,
         session_id,
         quota,
+        tunnel_permit,
     } = granted;
 
     let (outgoing, mut requests) = mpsc::channel(FRAME_QUEUE);
@@ -288,6 +406,7 @@ async fn serve_tunnel(mut socket: WebSocket, state: EdgeState) {
         endpoint_id,
         requests_per_minute: quota.requests_per_minute,
         store: state.store.clone(),
+        _tunnel_permit: tunnel_permit,
     });
     state
         .sessions
@@ -326,7 +445,9 @@ async fn serve_tunnel(mut socket: WebSocket, state: EdgeState) {
         sessions.remove(&name);
     }
     drop(sessions);
-    let _ = state.store.close_session(session_id, "disconnected").await;
+    if let Err(error) = state.store.close_session(session_id, "disconnected").await {
+        tracing::error!(%error, session_id, "could not close a tunnel session");
+    }
 }
 
 async fn handle_client_frame(session: &Session, frame: ClientFrame) {
@@ -366,7 +487,7 @@ async fn handle_client_frame(session: &Session, frame: ClientFrame) {
 }
 
 async fn record_request(session: &Session, pending: Arc<Pending>, status: Option<u16>) {
-    let _ = session
+    if let Err(error) = session
         .store
         .record_request(RequestRecord {
             session_id: session.session_id,
@@ -376,7 +497,10 @@ async fn record_request(session: &Session, pending: Arc<Pending>, status: Option
             bytes_in: pending.bytes_in.load(Ordering::Relaxed),
             bytes_out: pending.bytes_out.load(Ordering::Relaxed),
         })
-        .await;
+        .await
+    {
+        tracing::error!(%error, session_id = session.session_id, "could not persist request metrics");
+    }
 }
 
 async fn forward_public(State(state): State<EdgeState>, request: Request) -> Response {
@@ -501,6 +625,7 @@ async fn request_device_code(State(state): State<EdgeState>) -> Response {
         .await
         .is_err()
     {
+        tracing::error!("could not persist a device authorization");
         return (StatusCode::INTERNAL_SERVER_ERROR, "could not start login").into_response();
     }
     Json(serde_json::json!({
@@ -568,6 +693,7 @@ async fn approve_device_page(
         );
     };
     if !secrets_match(expected, &form.secret.clone().unwrap_or_default()) {
+        tracing::warn!("rejected device approval with an invalid secret");
         return device_html(
             StatusCode::FORBIDDEN,
             "<h1>Not approved</h1><p>The approval secret does not match.</p>",
@@ -614,6 +740,15 @@ async fn approve_device_page(
             "<h1>Not approved</h1><p>The edge could not complete the login.</p>",
         ),
     }
+}
+
+fn device_rate_limited(error: GovernorError) -> Response {
+    tracing::warn!(reason = %error, "limited device authorization request");
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        "too many login attempts; retry later",
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]

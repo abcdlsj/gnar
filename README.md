@@ -129,7 +129,7 @@ Start an edge for local use:
 $ gnar serve
 ```
 
-The interactive setup asks whether the edge allows anonymous publishing or requires accounts. Account mode uses an approval secret for the device verification page.
+The interactive setup asks whether the edge allows anonymous publishing or requires accounts. Account mode uses an approval secret for the device verification page and requires every tunnel owner to sign in. Public tunnel URLs remain accessible without signing in.
 
 For a non-interactive account-enabled deployment, provide the secret explicitly:
 
@@ -161,6 +161,8 @@ $ docker run -d --name gnar --restart unless-stopped \
 Put an HTTPS reverse proxy in front of the container. The proxy must preserve WebSocket upgrades.
 
 Use `--anonymous-only` instead of an approval secret when accounts are not needed.
+
+The edge limits device-code creation and approval attempts. It also removes expired device codes, expired unreserved endpoints, and old sessions that have no retained request metrics. Warning and error logs report rejected authentication, exhausted limits, persistence failures, and cleanup failures without including credentials or traffic contents.
 
 ## Security and privacy
 

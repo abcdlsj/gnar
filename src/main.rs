@@ -12,6 +12,7 @@ mod ui;
 use std::process::ExitCode;
 
 use clap::Parser;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::app::App;
 use crate::cli::{Cli, Command};
@@ -20,6 +21,12 @@ use crate::output::Output;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .finish()
+        .try_init();
     let cli = Cli::parse();
     let output = Output::new(cli.json, cli.no_tui);
 

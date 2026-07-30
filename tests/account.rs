@@ -157,7 +157,7 @@ async fn a_reserved_name_is_refused_to_everyone_else() {
     assert!(refused.contains("reserved by alice"), "{refused}");
 
     let anonymous = run_client(&edge, &upstream, &["--name", "checkout"], None);
-    assert!(anonymous.contains("reserved by alice"), "{anonymous}");
+    assert!(anonymous.contains("requires an account"), "{anonymous}");
     edge.cleanup();
 }
 
@@ -180,7 +180,7 @@ async fn only_the_owner_can_release_a_reserved_name() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn traffic_beyond_the_rate_limit_is_rejected_with_a_reason() {
-    let edge = start_edge(&["--anonymous-requests", "2"]).await;
+    let edge = start_anonymous_edge(&["--anonymous-requests", "2"]).await;
     let upstream = start_upstream().await;
     let client = reqwest::Client::new();
     let _tunnel = spawn_client(&edge, &upstream, &["--name", "public-demo"], None);
@@ -199,6 +199,46 @@ async fn traffic_beyond_the_rate_limit_is_rejected_with_a_reason() {
     let limited = client.get(&public).send().await.unwrap();
     assert_eq!(limited.status(), 429);
     assert!(limited.text().await.unwrap().contains("Rate limit reached"));
+    edge.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn anonymous_tunnel_limit_is_enforced() {
+    let edge = start_anonymous_edge(&["--anonymous-tunnels", "1"]).await;
+    let upstream = start_upstream().await;
+    let client = reqwest::Client::new();
+    let _first = spawn_client(&edge, &upstream, &["--name", "first"], None);
+    wait_for_success(&client, &format!("{}/t/first/", edge.url)).await;
+
+    let second = run_client(&edge, &upstream, &["--name", "second"], None);
+
+    assert!(
+        second.contains("already has 1 anonymous tunnels"),
+        "{second}"
+    );
+    edge.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_code_creation_is_rate_limited() {
+    let edge = start_edge(&[]).await;
+    let client = reqwest::Client::new();
+    let mut statuses = Vec::new();
+    for _ in 0..7 {
+        statuses.push(
+            client
+                .post(format!("{}/v1/device/code", edge.url))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+        );
+    }
+
+    assert_eq!(
+        statuses.last(),
+        Some(&reqwest::StatusCode::TOO_MANY_REQUESTS)
+    );
     edge.cleanup();
 }
 
@@ -273,23 +313,34 @@ async fn release(client: &reqwest::Client, edge: &Edge, name: &str, token: &str)
 }
 
 async fn start_edge(extra: &[&str]) -> Edge {
+    start_edge_in_mode(extra, true).await
+}
+
+async fn start_anonymous_edge(extra: &[&str]) -> Edge {
+    start_edge_in_mode(extra, false).await
+}
+
+async fn start_edge_in_mode(extra: &[&str], accounts: bool) -> Edge {
     let port = free_port();
     let url = format!("http://127.0.0.1:{port}");
     let database = temp_path("db");
     let config_dir = temp_path("config");
     let mut command = Command::new(env!("CARGO_BIN_EXE_gnar"));
+    command.args([
+        "serve",
+        "--listen",
+        &format!("127.0.0.1:{port}"),
+        "--public-url",
+        &url,
+        "--database",
+        database.to_str().unwrap(),
+    ]);
+    if accounts {
+        command.args(["--approval-secret", APPROVAL_SECRET]);
+    } else {
+        command.arg("--anonymous-only");
+    }
     command
-        .args([
-            "serve",
-            "--listen",
-            &format!("127.0.0.1:{port}"),
-            "--public-url",
-            &url,
-            "--database",
-            database.to_str().unwrap(),
-            "--approval-secret",
-            APPROVAL_SECRET,
-        ])
         .args(extra)
         .stdout(Stdio::null())
         .stderr(Stdio::null());

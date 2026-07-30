@@ -6,6 +6,14 @@ use tokio::sync::{mpsc, oneshot};
 
 const ENDPOINT_LIFETIME_SECONDS: i64 = 3600;
 const DEVICE_CODE_LIFETIME_SECONDS: i64 = 600;
+const SESSION_RETENTION_SECONDS: i64 = 7 * 24 * 60 * 60;
+
+#[derive(Debug, Default)]
+pub struct CleanupStats {
+    pub device_authorizations: usize,
+    pub endpoints: usize,
+    pub sessions: usize,
+}
 
 pub struct RequestRecord {
     pub session_id: i64,
@@ -71,6 +79,7 @@ enum Command {
         account_id: i64,
         reply: Reply<bool>,
     },
+    Cleanup(Reply<CleanupStats>),
 }
 
 type Reply<T> = oneshot::Sender<Result<T, String>>;
@@ -206,6 +215,10 @@ impl Store {
             .await
     }
 
+    pub async fn cleanup(&self) -> Result<CleanupStats, String> {
+        self.request(Command::Cleanup).await
+    }
+
     async fn request<T>(&self, command: impl FnOnce(Reply<T>) -> Command) -> Result<T, String> {
         let (reply, response) = oneshot::channel();
         self.commands
@@ -293,6 +306,13 @@ fn apply(connection: &Connection, command: Command, issued: &mut HashMap<String,
         }
         Command::RecordRequest(record, reply) => {
             send(reply, record_request(connection, &record));
+        }
+        Command::Cleanup(reply) => {
+            let result = cleanup(connection);
+            if result.is_ok() {
+                issued.retain(|hash, _| authorization_exists(connection, hash));
+            }
+            send(reply, result);
         }
     }
 }
@@ -384,7 +404,66 @@ fn open_connection(path: PathBuf) -> rusqlite::Result<Connection> {
          PRAGMA busy_timeout = 5000;",
     )?;
     migrate(&mut connection)?;
+    connection.execute(
+        "UPDATE tunnel_sessions
+         SET disconnected_at = unixepoch(), close_reason = 'edge restarted'
+         WHERE disconnected_at IS NULL",
+        [],
+    )?;
+    cleanup(&connection)?;
     Ok(connection)
+}
+
+fn cleanup(connection: &Connection) -> rusqlite::Result<CleanupStats> {
+    let device_authorizations = connection.execute(
+        "DELETE FROM device_authorizations WHERE expires_at <= unixepoch()",
+        [],
+    )?;
+    let sessions = connection.execute(
+        "DELETE FROM tunnel_sessions
+         WHERE disconnected_at < unixepoch() - ?1
+           AND NOT EXISTS (
+               SELECT 1 FROM request_metrics WHERE session_id = tunnel_sessions.id
+           )",
+        [SESSION_RETENTION_SECONDS],
+    )?;
+    connection.execute(
+        "DELETE FROM request_quota
+         WHERE endpoint_id IN (
+             SELECT id FROM endpoints
+             WHERE expires_at <= unixepoch()
+               AND NOT EXISTS (
+                   SELECT 1 FROM tunnel_sessions WHERE endpoint_id = endpoints.id
+               )
+         )",
+        [],
+    )?;
+    let endpoints = connection.execute(
+        "DELETE FROM endpoints
+         WHERE expires_at <= unixepoch()
+           AND NOT EXISTS (
+               SELECT 1 FROM tunnel_sessions WHERE endpoint_id = endpoints.id
+           )",
+        [],
+    )?;
+    Ok(CleanupStats {
+        device_authorizations,
+        endpoints,
+        sessions,
+    })
+}
+
+fn authorization_exists(connection: &Connection, hash: &str) -> bool {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM device_authorizations
+                WHERE device_code_hash = ?1 AND expires_at > unixepoch()
+            )",
+            [hash],
+            |row| row.get(0),
+        )
+        .unwrap_or(false)
 }
 
 fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
@@ -825,6 +904,52 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_expired_state_without_request_metrics() {
+        let (store, path) = store("cleanup").await;
+        store
+            .start_device_authorization(DeviceCode {
+                device_code_hash: hash_secret("expired-device"),
+                user_code: "OLD-CODE".into(),
+            })
+            .await
+            .unwrap();
+        let endpoint_id = endpoint_id(
+            store
+                .claim_endpoint("old-endpoint".into(), None)
+                .await
+                .unwrap(),
+        );
+        let session_id = store.open_session(endpoint_id).await.unwrap();
+        store.close_session(session_id, "done").await.unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute("UPDATE device_authorizations SET expires_at = 0", [])
+            .unwrap();
+        connection
+            .execute("UPDATE endpoints SET expires_at = 0", [])
+            .unwrap();
+        connection
+            .execute("UPDATE tunnel_sessions SET disconnected_at = 0", [])
+            .unwrap();
+        drop(connection);
+
+        let stats = store.cleanup().await.unwrap();
+
+        assert_eq!(stats.device_authorizations, 1);
+        assert_eq!(stats.sessions, 1);
+        assert_eq!(stats.endpoints, 1);
+        let connection = rusqlite::Connection::open(path).unwrap();
+        for table in ["device_authorizations", "tunnel_sessions", "endpoints"] {
+            let count: usize = connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "{table}");
+        }
     }
 
     #[tokio::test]

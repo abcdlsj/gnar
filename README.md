@@ -24,7 +24,7 @@ Set `GNAR_INSTALL_DIR` to use another directory. Set `GNAR_VERSION` to install a
 
 ```console
 $ curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/abcdlsj/gnar/master/install.sh \
-    | GNAR_VERSION=1.0.0 sh
+    | GNAR_VERSION=1.1.0 sh
 ```
 
 ## Quick start

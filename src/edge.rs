@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -15,12 +16,15 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
+use governor::{
+    DefaultDirectRateLimiter, DefaultKeyedRateLimiter, Quota as RateQuota, RateLimiter,
+};
 use rand::Rng;
 use serde::Deserialize;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_governor::governor::GovernorConfigBuilder;
-use tower_governor::key_extractor::{GlobalKeyExtractor, SmartIpKeyExtractor};
+use tower_governor::key_extractor::{GlobalKeyExtractor, KeyExtractor, SmartIpKeyExtractor};
 use tower_governor::{GovernorError, GovernorLayer};
 
 use crate::app::AppError;
@@ -51,6 +55,8 @@ struct EdgeState {
     store: Store,
     next_request: Arc<AtomicU64>,
     anonymous_tunnels: Arc<Semaphore>,
+    public_miss_source: Arc<DefaultKeyedRateLimiter<IpAddr>>,
+    public_miss_global: Arc<DefaultDirectRateLimiter>,
 }
 
 struct Session {
@@ -111,6 +117,12 @@ impl Edge {
             store,
             next_request: Arc::new(AtomicU64::new(1)),
             anonymous_tunnels: Arc::new(Semaphore::new(config.anonymous_tunnels)),
+            public_miss_source: Arc::new(RateLimiter::keyed(RateQuota::per_minute(
+                NonZeroU32::new(30).expect("nonzero public miss source limit"),
+            ))),
+            public_miss_global: Arc::new(RateLimiter::direct(RateQuota::per_minute(
+                NonZeroU32::new(300).expect("nonzero public miss global limit"),
+            ))),
             config: config.clone(),
         };
         let mut source_limit = GovernorConfigBuilder::default();
@@ -122,10 +134,12 @@ impl Edge {
                 .expect("valid device source rate limit"),
         );
         let source_limiter = source_limit.limiter().clone();
+        let public_miss_limiter = state.public_miss_source.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(CLEANUP_INTERVAL).await;
                 source_limiter.retain_recent();
+                public_miss_limiter.retain_recent();
             }
         });
         let mut global_limit = GovernorConfigBuilder::default();
@@ -517,18 +531,10 @@ async fn forward_public(State(state): State<EdgeState>, request: Request) -> Res
             .into_response();
     }
     let Some((name, forwarded_path)) = route(&state, &request) else {
-        return tunnel_page(
-            StatusCode::NOT_FOUND,
-            "Tunnel not found",
-            "Check the address and ask its owner to start gnar again.",
-        );
+        return public_miss(&state, &request);
     };
     let Some(session) = state.sessions.read().await.get(&name).cloned() else {
-        return tunnel_page(
-            StatusCode::BAD_GATEWAY,
-            "Tunnel offline",
-            "This endpoint exists, but its local service is not connected.",
-        );
+        return public_miss(&state, &request);
     };
     if !session.take_request_budget().await {
         return tunnel_page(
@@ -548,6 +554,35 @@ async fn forward_public(State(state): State<EdgeState>, request: Request) -> Res
             &reason,
         ),
     }
+}
+
+fn public_miss(state: &EdgeState, request: &Request) -> Response {
+    let source = match SmartIpKeyExtractor.extract(request) {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::warn!(reason = %error, "could not identify the source of a public route miss");
+            return tunnel_page(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests",
+                "Wait a moment and retry.",
+            );
+        }
+    };
+    if state.public_miss_source.check_key(&source).is_err()
+        || state.public_miss_global.check().is_err()
+    {
+        tracing::warn!(%source, "limited public route misses");
+        return tunnel_page(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many requests",
+            "Wait a moment and retry.",
+        );
+    }
+    tunnel_page(
+        StatusCode::NOT_FOUND,
+        "Tunnel not found",
+        "Check the address and ask its owner to start gnar again.",
+    )
 }
 
 async fn describe_account(State(state): State<EdgeState>, request: Request) -> Response {

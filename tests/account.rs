@@ -242,6 +242,35 @@ async fn device_code_creation_is_rate_limited() {
     edge.cleanup();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn missing_and_offline_tunnels_are_404_and_misses_are_limited() {
+    let edge = start_anonymous_edge(&[]).await;
+    let upstream = start_upstream().await;
+    let client = reqwest::Client::new();
+    let tunnel = spawn_client(&edge, &upstream, &["--name", "temporary"], None);
+    let public = format!("{}/t/temporary/", edge.url);
+    wait_for_success(&client, &public).await;
+    drop(tunnel);
+
+    let mut offline = reqwest::StatusCode::OK;
+    for _ in 0..100 {
+        offline = client.get(&public).send().await.unwrap().status();
+        if offline == reqwest::StatusCode::NOT_FOUND {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(offline, reqwest::StatusCode::NOT_FOUND);
+
+    let missing = format!("{}/t/never-registered/", edge.url);
+    let mut status = reqwest::StatusCode::OK;
+    for _ in 0..31 {
+        status = client.get(&missing).send().await.unwrap().status();
+    }
+    assert_eq!(status, reqwest::StatusCode::TOO_MANY_REQUESTS);
+    edge.cleanup();
+}
+
 async fn redeem(client: &reqwest::Client, edge: &Edge, device_code: &str) -> serde_json::Value {
     client
         .post(format!("{}/v1/device/token", edge.url))
@@ -537,7 +566,7 @@ async fn a_non_interactive_edge_serves_anonymous_tunnels_without_asking() {
         .send()
         .await
         .unwrap();
-    assert_eq!(anonymous.status(), 502, "tunnel routing stays available");
+    assert_eq!(anonymous.status(), 404, "tunnel routing stays available");
 
     let _ = child.kill();
     let _ = child.wait();

@@ -50,8 +50,8 @@ async fn request_crosses_edge_and_is_recorded() {
     let mut edge = ChildGuard(edge);
     wait_for_status(&format!("{edge_url}/healthz"), 200).await;
     let missing = reqwest::get(format!("{edge_url}/t/missing")).await.unwrap();
-    assert_eq!(missing.status(), 502);
-    assert!(missing.text().await.unwrap().contains("Tunnel offline"));
+    assert_eq!(missing.status(), 404);
+    assert!(missing.text().await.unwrap().contains("Tunnel not found"));
 
     let target = format!("http://{upstream_address}/base");
     let tunnel = Command::new(binary)

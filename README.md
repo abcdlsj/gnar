@@ -162,7 +162,7 @@ Put an HTTPS reverse proxy in front of the container. The proxy must preserve We
 
 Use `--anonymous-only` instead of an approval secret when accounts are not needed.
 
-The edge limits device-code creation and approval attempts. It also removes expired device codes, expired unreserved endpoints, and old sessions that have no retained request metrics. Warning and error logs report rejected authentication, exhausted limits, persistence failures, and cleanup failures without including credentials or traffic contents.
+The edge limits device-code creation, approval attempts, and repeated requests for unavailable tunnel names. Unknown and offline tunnels both return HTTP 404. It also removes expired device codes, expired unreserved endpoints, and old sessions that have no retained request metrics. Warning and error logs report rejected authentication, exhausted limits, persistence failures, and cleanup failures without including credentials or traffic contents.
 
 ## Security and privacy
 

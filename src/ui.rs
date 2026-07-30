@@ -25,9 +25,9 @@ use crate::protocol::{ClientFrame, EdgeFrame, Header};
 
 const MAX_EXCHANGES: usize = 500;
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
+const BODY_PREVIEW_LINES: usize = 12;
 const NOTICE_LIFETIME: Duration = Duration::from_secs(3);
 const HEARTBEAT: Duration = Duration::from_secs(1);
-const BODY_PAGE: i16 = 8;
 
 const PROMPT_SUCCESS: AnsiStyle =
     AnsiStyle::new().fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::Green)));
@@ -623,7 +623,6 @@ struct Dashboard {
     selected: usize,
     following: bool,
     pane: Pane,
-    body_scroll: u16,
     filter: String,
     filter_editing: bool,
     notice: Option<Notice>,
@@ -777,7 +776,6 @@ impl Dashboard {
             selected: 0,
             following: true,
             pane: Pane::Response,
-            body_scroll: 0,
             filter: String::new(),
             filter_editing: false,
             notice: None,
@@ -899,10 +897,7 @@ impl Dashboard {
                     Pane::Request => Pane::Response,
                     Pane::Response => Pane::Request,
                 };
-                self.body_scroll = 0;
             }
-            KeyCode::PageDown | KeyCode::Char('d') => self.scroll_body(BODY_PAGE),
-            KeyCode::PageUp | KeyCode::Char('u') => self.scroll_body(-BODY_PAGE),
             KeyCode::Char(' ') => {
                 self.following = !self.following;
                 if self.following {
@@ -919,11 +914,6 @@ impl Dashboard {
         let last = self.visible_exchanges().len().saturating_sub(1);
         self.selected = index.min(last);
         self.following = self.selected == 0;
-        self.body_scroll = 0;
-    }
-
-    fn scroll_body(&mut self, lines: i16) {
-        self.body_scroll = self.body_scroll.saturating_add_signed(lines);
     }
 
     fn visible_exchanges(&self) -> Vec<&Exchange> {
@@ -1245,7 +1235,22 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
             lines.push(Line::raw(""));
         }
         let text = display_body(headers, body);
-        lines.extend(text.lines().map(|line| Line::raw(line.to_string())));
+        let body_lines = text.lines().collect::<Vec<_>>();
+        lines.extend(
+            body_lines
+                .iter()
+                .take(BODY_PREVIEW_LINES)
+                .map(|line| Line::raw((*line).to_string())),
+        );
+        if body_lines.len() > BODY_PREVIEW_LINES {
+            lines.push(Line::styled(
+                format!(
+                    "… {} more lines not shown",
+                    body_lines.len() - BODY_PREVIEW_LINES
+                ),
+                Style::default().fg(MUTED),
+            ));
+        }
     } else {
         lines.push(Line::styled(
             exchange.placeholder(dashboard.pane),
@@ -1258,13 +1263,9 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
         exchange.method,
         truncate(&exchange.path, area.width.saturating_sub(28) as usize)
     );
-    let scroll = dashboard
-        .body_scroll
-        .min(lines.len().saturating_sub(1) as u16);
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .scroll((scroll, 0))
             .block(rule(&title, other.to_string())),
         area,
     );
@@ -1554,15 +1555,12 @@ mod tests {
     }
 
     #[test]
-    fn tab_switches_pane_and_resets_body_scroll() {
+    fn tab_switches_pane() {
         let mut dashboard = dashboard();
-        press(&mut dashboard, KeyCode::PageDown);
-        assert!(dashboard.body_scroll > 0);
 
         press(&mut dashboard, KeyCode::Tab);
 
         assert!(dashboard.pane == Pane::Request);
-        assert_eq!(dashboard.body_scroll, 0);
     }
 
     #[test]
@@ -1929,6 +1927,33 @@ mod tests {
         assert!(screen.contains("RESPONSE"));
         assert!(screen.contains("users"));
         assert!(screen.contains("q quit"));
+    }
+
+    #[test]
+    fn long_bodies_only_show_the_first_twelve_lines() {
+        let mut dashboard = dashboard();
+        request(&mut dashboard, 1, "GET", "/long-page");
+        dashboard.apply_client(&ClientFrame::Start {
+            id: 1,
+            status: 200,
+            headers: vec![("content-type".into(), b"text/plain".to_vec())],
+        });
+        let body = (0..30)
+            .map(|line| format!("body-line-{line:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        dashboard.apply_client(&ClientFrame::Chunk {
+            id: 1,
+            body: body.into_bytes(),
+        });
+        dashboard.apply_client(&ClientFrame::End { id: 1 });
+
+        let screen = render(&dashboard);
+        assert!(screen.contains("body-line-00"));
+        assert!(screen.contains("body-line-11"));
+        assert!(!screen.contains("body-line-12"));
+        assert!(!screen.contains("body-line-29"));
+        assert!(screen.contains("18 more lines not shown"));
     }
 
     #[test]

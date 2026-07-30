@@ -112,7 +112,7 @@ The interactive inspector provides these actions:
 - Select a request and inspect its response.
 - Switch between request and response details.
 - Filter by method, path, or status.
-- Scroll long bodies.
+- Long request and response bodies show their first 12 lines. This limit only affects the inspector display.
 - Replay a request against the local service.
 - Export a request as a curl command.
 - Copy or open the public URL.

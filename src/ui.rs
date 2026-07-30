@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use anstyle::{AnsiColor, Color as AnsiStyleColor, Style as AnsiStyle};
+use anstyle::{Color as AnsiStyleColor, RgbColor, Style as AnsiStyle};
 use base64::Engine;
 use crossterm::event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
@@ -30,17 +30,20 @@ const NOTICE_LIFETIME: Duration = Duration::from_secs(3);
 const HEARTBEAT: Duration = Duration::from_secs(1);
 
 const PROMPT_SUCCESS: AnsiStyle =
-    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::Green)));
+    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Rgb(RgbColor(126, 231, 135))));
 const PROMPT_ACCENT: AnsiStyle = AnsiStyle::new()
-    .fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::Green)))
+    .fg_color(Some(AnsiStyleColor::Rgb(RgbColor(126, 231, 135))))
     .bold();
 const PROMPT_MUTED: AnsiStyle =
-    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::BrightBlack)));
+    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Rgb(RgbColor(125, 133, 144))));
+const PROMPT_KEY: AnsiStyle = AnsiStyle::new()
+    .fg_color(Some(AnsiStyleColor::Rgb(RgbColor(125, 133, 144))))
+    .bold();
 const PROMPT_FADED: AnsiStyle = AnsiStyle::new()
-    .fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::BrightBlack)))
+    .fg_color(Some(AnsiStyleColor::Rgb(RgbColor(125, 133, 144))))
     .dimmed();
 const PROMPT_ORIGIN: AnsiStyle =
-    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Ansi(AnsiColor::Cyan)));
+    AnsiStyle::new().fg_color(Some(AnsiStyleColor::Rgb(RgbColor(121, 192, 255))));
 const PROMPT_BOLD: AnsiStyle = AnsiStyle::new().bold();
 
 const ACCENT: Color = Color::Rgb(126, 231, 135);
@@ -110,6 +113,7 @@ pub fn choose_service(services: &[LocalService]) -> io::Result<Option<usize>> {
     for line in view.lines(&rows) {
         writeln!(stderr, "{line}")?;
     }
+    writeln!(stderr)?;
     write!(stderr, "{}", view.hint())?;
     stderr.flush()?;
 
@@ -153,10 +157,11 @@ pub fn choose_edge(edges: &[String]) -> io::Result<Option<usize>> {
     let mut stderr = io::stderr();
     let mut view = View::new(edges.len());
 
-    writeln!(stderr, "Choose an edge")?;
+    write!(stderr, "{}", edge_header(edges.len()))?;
     for line in edge_lines(edges, &view) {
         writeln!(stderr, "{line}")?;
     }
+    writeln!(stderr)?;
     write!(stderr, "{}", edge_hint(edges.len()))?;
     stderr.flush()?;
 
@@ -196,12 +201,14 @@ fn edge_lines(edges: &[String], view: &View) -> Vec<String> {
     let width = edges.len().to_string().len();
     (view.offset..view.offset + view.height)
         .map(|index| {
+            if index == view.offset && view.hidden_above() > 0 {
+                return overflow_line(view.hidden_above() + 1, "earlier");
+            }
+            if index + 1 == view.offset + view.height && view.hidden_below() > 0 {
+                return overflow_line(view.hidden_below() + 1, "more");
+            }
             let number = format!("{:>width$}", index + 1, width = width);
-            let fade = (index == view.offset && view.hidden_above() > 0)
-                || (index + 1 == view.offset + view.height && view.hidden_below() > 0);
-            if fade {
-                format!("  {PROMPT_FADED}{number} {}{PROMPT_FADED:#}", edges[index])
-            } else if index == view.selected {
+            if index == view.selected {
                 format!(
                     "{PROMPT_SUCCESS}›{PROMPT_SUCCESS:#} {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {PROMPT_ACCENT}{}{PROMPT_ACCENT:#}",
                     edges[index]
@@ -213,18 +220,34 @@ fn edge_lines(edges: &[String], view: &View) -> Vec<String> {
         .collect()
 }
 
+fn overflow_line(count: usize, direction: &str) -> String {
+    format!("  {PROMPT_MUTED}…  {count} {direction}{PROMPT_MUTED:#}")
+}
+
+fn edge_header(count: usize) -> String {
+    let plural = if count == 1 { "edge" } else { "edges" };
+    prompt_top("SELECT EDGE", &format!("{count} available {plural}"))
+}
+
 fn edge_hint(count: usize) -> String {
-    format!(
-        "  ↑↓ select · 1-{} jump · enter connect · esc cancel",
-        count.min(9)
+    let jump = format!("1-{}", count.min(9));
+    prompt_hint(
+        &[
+            ("↑↓", "select"),
+            (&jump, "jump"),
+            ("ENTER", "connect"),
+            ("ESC", "cancel"),
+        ],
+        None,
     )
 }
 
 fn redraw_edges(writer: &mut impl Write, edges: &[String], view: &View) -> io::Result<()> {
-    write!(writer, "\r\x1b[{}A", view.height)?;
+    write!(writer, "\r\x1b[{}A", view.height + 1)?;
     for line in edge_lines(edges, view) {
         write!(writer, "\x1b[2K{line}\r\n")?;
     }
+    write!(writer, "\x1b[2K\r\n")?;
     write!(writer, "\x1b[2K{}", edge_hint(edges.len()))?;
     writer.flush()
 }
@@ -235,11 +258,12 @@ fn finish_edge_prompt(
     view: &View,
     choice: Option<usize>,
 ) -> io::Result<()> {
-    write!(writer, "\r\x1b[{}A", view.height)?;
-    for _ in 0..view.height {
+    let prompt_height = view.height + 1;
+    write!(writer, "\r\x1b[{prompt_height}A")?;
+    for _ in 0..prompt_height {
         writeln!(writer, "\x1b[2K")?;
     }
-    write!(writer, "\x1b[2K\r\x1b[{}A", view.height)?;
+    write!(writer, "\x1b[2K\r\x1b[{prompt_height}A")?;
     match choice {
         Some(selected) => writeln!(
             writer,
@@ -274,6 +298,14 @@ impl View {
         self.total > self.height
     }
 
+    fn hidden_above(&self) -> usize {
+        self.offset
+    }
+
+    fn hidden_below(&self) -> usize {
+        self.total - self.offset - self.height
+    }
+
     fn select(&mut self, index: usize) {
         self.selected = index.min(self.total - 1);
         let margin = usize::from(self.scrolls());
@@ -286,37 +318,59 @@ impl View {
         self.offset = self.offset.min(self.total - self.height);
     }
 
-    fn hidden_above(&self) -> usize {
-        self.offset
-    }
-
-    fn hidden_below(&self) -> usize {
-        self.total - self.offset - self.height
-    }
-
     fn lines(&self, rows: &[ServiceRow]) -> Vec<String> {
         let width = self.total.to_string().len();
         (self.offset..self.offset + self.height)
             .map(|index| {
-                let fade = (index == self.offset && self.hidden_above() > 0)
-                    || (index + 1 == self.offset + self.height && self.hidden_below() > 0);
-                prompt_row(&rows[index], index, width, index == self.selected, fade)
+                if index == self.offset && self.hidden_above() > 0 {
+                    return overflow_line(self.hidden_above() + 1, "earlier");
+                }
+                if index + 1 == self.offset + self.height && self.hidden_below() > 0 {
+                    return overflow_line(self.hidden_below() + 1, "more");
+                }
+                prompt_row(&rows[index], index, width, index == self.selected)
             })
             .collect()
     }
 
     fn hint(&self) -> String {
         let jump = self.total.min(9);
-        let mut hint = format!("  ↑↓ select · 1-{jump} jump · enter publish · esc cancel");
-        if self.scrolls() {
-            hint.push_str(&format!(
-                "{PROMPT_MUTED} · {} of {}{PROMPT_MUTED:#}",
-                self.selected + 1,
-                self.total
-            ));
-        }
-        hint
+        let jump = format!("1-{jump}");
+        let position = self.scrolls().then_some((self.selected + 1, self.total));
+        prompt_hint(
+            &[
+                ("↑↓", "select"),
+                (&jump, "jump"),
+                ("ENTER", "publish"),
+                ("ESC", "cancel"),
+            ],
+            position,
+        )
     }
+}
+
+fn prompt_top(status: &str, detail: &str) -> String {
+    format!(
+        "\n{PROMPT_ACCENT}gnar{PROMPT_ACCENT:#}  {PROMPT_SUCCESS}● {status}{PROMPT_SUCCESS:#}  {PROMPT_MUTED}{detail}{PROMPT_MUTED:#}\n\n"
+    )
+}
+
+fn prompt_hint(controls: &[(&str, &str)], position: Option<(usize, usize)>) -> String {
+    let mut hint = String::from("  ");
+    for (index, (key, action)) in controls.iter().enumerate() {
+        if index > 0 {
+            hint.push_str(&format!(" {PROMPT_FADED}·{PROMPT_FADED:#} "));
+        }
+        hint.push_str(&format!(
+            "{PROMPT_KEY}{key}{PROMPT_KEY:#} {PROMPT_MUTED}{action}{PROMPT_MUTED:#}"
+        ));
+    }
+    if let Some((selected, total)) = position {
+        hint.push_str(&format!(
+            " {PROMPT_FADED}·{PROMPT_FADED:#} {PROMPT_MUTED}{selected} of {total}{PROMPT_MUTED:#}"
+        ));
+    }
+    hint
 }
 
 pub enum LoginSetup {
@@ -335,14 +389,21 @@ pub fn choose_login_setup(generated: &str) -> io::Result<LoginSetup> {
     ];
 
     let mut stderr = io::stderr();
-    writeln!(stderr, "Who may use this edge?")?;
+    write!(stderr, "{}", prompt_top("SET UP EDGE", "publishing access"))?;
     for (index, (title, detail)) in CHOICES.iter().enumerate() {
         writeln!(stderr, "{}", choice_row(index, title, detail, index == 0))?;
     }
-    write!(
-        stderr,
-        "  ↑↓ select · 1-2 jump · enter confirm · esc cancel"
-    )?;
+    writeln!(stderr)?;
+    let hint = prompt_hint(
+        &[
+            ("↑↓", "select"),
+            ("1-2", "jump"),
+            ("ENTER", "confirm"),
+            ("ESC", "cancel"),
+        ],
+        None,
+    );
+    write!(stderr, "{hint}")?;
     stderr.flush()?;
 
     enable_raw_mode()?;
@@ -363,7 +424,7 @@ pub fn choose_login_setup(generated: &str) -> io::Result<LoginSetup> {
             _ => {}
         }
         if selected != before {
-            write!(stderr, "\r\x1b[{}A", CHOICES.len())?;
+            write!(stderr, "\r\x1b[{}A", CHOICES.len() + 1)?;
             for (index, (title, detail)) in CHOICES.iter().enumerate() {
                 write!(
                     stderr,
@@ -371,21 +432,19 @@ pub fn choose_login_setup(generated: &str) -> io::Result<LoginSetup> {
                     choice_row(index, title, detail, index == selected)
                 )?;
             }
-            write!(
-                stderr,
-                "\x1b[2K  ↑↓ select · 1-2 jump · enter confirm · esc cancel"
-            )?;
+            write!(stderr, "\x1b[2K\r\n\x1b[2K{hint}")?;
             stderr.flush()?;
         }
     };
     let _ = disable_raw_mode();
 
     let collapse = |writer: &mut io::Stderr| -> io::Result<()> {
-        write!(writer, "\r\x1b[{}A", CHOICES.len())?;
-        for _ in 0..CHOICES.len() {
+        let prompt_height = CHOICES.len() + 1;
+        write!(writer, "\r\x1b[{prompt_height}A")?;
+        for _ in 0..prompt_height {
             writeln!(writer, "\x1b[2K")?;
         }
-        write!(writer, "\x1b[2K\r\x1b[{}A", CHOICES.len())
+        write!(writer, "\x1b[2K\r\x1b[{prompt_height}A")
     };
 
     match picked {
@@ -436,7 +495,7 @@ fn choice_row(index: usize, title: &str, detail: &str, selected: bool) -> String
 fn read_secret(writer: &mut io::Stderr, generated: &str) -> io::Result<Option<String>> {
     write!(
         writer,
-        "  Approval secret {PROMPT_MUTED}(enter to generate one){PROMPT_MUTED:#}\n  › "
+        "  {PROMPT_BOLD}Approval secret{PROMPT_BOLD:#}  {PROMPT_MUTED}(ENTER to generate one){PROMPT_MUTED:#}\n  › "
     )?;
     writer.flush()?;
 
@@ -519,20 +578,11 @@ fn origin(url: &Url) -> String {
 
 fn prompt_header(count: usize) -> String {
     let plural = if count == 1 { "service" } else { "services" };
-    format!("Found {count} local {plural}\n")
+    prompt_top("DISCOVERED", &format!("{count} local {plural}"))
 }
 
-fn prompt_row(row: &ServiceRow, index: usize, width: usize, selected: bool, fade: bool) -> String {
+fn prompt_row(row: &ServiceRow, index: usize, width: usize, selected: bool) -> String {
     let number = format!("{:>width$}", index + 1, width = width);
-    if fade {
-        let mut line = format!("  {PROMPT_FADED}{number} {}  {:>6}", row.kind, row.origin);
-        if !row.detail.is_empty() {
-            line.push_str(&format!("  {}", row.detail));
-        }
-        line.push_str(&format!("{PROMPT_FADED:#}"));
-        return line;
-    }
-
     let mut line = if selected {
         format!(
             "{PROMPT_SUCCESS}›{PROMPT_SUCCESS:#} {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {PROMPT_ACCENT}{}{PROMPT_ACCENT:#}",
@@ -542,7 +592,7 @@ fn prompt_row(row: &ServiceRow, index: usize, width: usize, selected: bool, fade
         format!("  {PROMPT_MUTED}{number}{PROMPT_MUTED:#} {}", row.kind)
     };
     line.push_str(&format!(
-        "  {PROMPT_ORIGIN}{:>6}{PROMPT_ORIGIN:#}",
+        "  {PROMPT_ORIGIN}{:<6}{PROMPT_ORIGIN:#}",
         row.origin
     ));
     if !row.detail.is_empty() {
@@ -552,10 +602,11 @@ fn prompt_row(row: &ServiceRow, index: usize, width: usize, selected: bool, fade
 }
 
 fn redraw_rows(writer: &mut impl Write, rows: &[ServiceRow], view: &View) -> io::Result<()> {
-    write!(writer, "\r\x1b[{}A", view.height)?;
+    write!(writer, "\r\x1b[{}A", view.height + 1)?;
     for line in view.lines(rows) {
         write!(writer, "\x1b[2K{line}\r\n")?;
     }
+    write!(writer, "\x1b[2K\r\n")?;
     write!(writer, "\x1b[2K{}", view.hint())?;
     writer.flush()
 }
@@ -566,11 +617,12 @@ fn finish_prompt(
     view: &View,
     choice: Option<usize>,
 ) -> io::Result<()> {
-    write!(writer, "\r\x1b[{}A", view.height)?;
-    for _ in 0..view.height {
+    let prompt_height = view.height + 1;
+    write!(writer, "\r\x1b[{prompt_height}A")?;
+    for _ in 0..prompt_height {
         writeln!(writer, "\x1b[2K")?;
     }
-    write!(writer, "\x1b[2K\r\x1b[{}A", view.height)?;
+    write!(writer, "\x1b[2K\r\x1b[{prompt_height}A")?;
     match choice {
         Some(selected) => {
             let row = &rows[selected];
@@ -1206,8 +1258,8 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
     };
 
     let (label, other) = match dashboard.pane {
-        Pane::Request => ("REQUEST", "tab → response"),
-        Pane::Response => ("RESPONSE", "tab → request"),
+        Pane::Request => ("REQUEST", "TAB → response"),
+        Pane::Response => ("RESPONSE", "TAB → request"),
     };
     let (headers, body) = exchange.pane(dashboard.pane);
     let mut lines = headers
@@ -1280,7 +1332,7 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
                     format!("{}▌", dashboard.filter),
                     Style::default().fg(ACCENT),
                 ),
-                Span::styled("   enter apply · esc clear", Style::default().fg(MUTED)),
+                Span::styled("   ENTER apply · ESC clear", Style::default().fg(MUTED)),
             ])),
             area,
         );
@@ -1289,14 +1341,14 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
 
     let keys = [
         ("↑↓", "select"),
-        ("tab", "req/res"),
+        ("TAB", "req/res"),
         ("/", "filter"),
         ("r", "replay"),
         ("e", "curl"),
         ("c", "copy"),
         ("o", "open"),
         (
-            "space",
+            "SPACE",
             if dashboard.following {
                 "hold"
             } else {
@@ -1489,12 +1541,16 @@ mod tests {
         let first = edge_lines(&edges, &view);
         assert_eq!(first.len(), 7);
         assert!(first[0].contains("edge-1.example.com"));
-        assert!(first[6].contains(&super::PROMPT_FADED.to_string()));
+        assert!(first[0].contains(&super::PROMPT_ACCENT.to_string()));
+        assert!(!first[6].contains(&super::PROMPT_FADED.to_string()));
+        assert!(first[6].contains("…  2 more"));
 
         view.select(7);
         let last = edge_lines(&edges, &view);
-        assert!(last[0].contains(&super::PROMPT_FADED.to_string()));
+        assert!(!last[0].contains(&super::PROMPT_FADED.to_string()));
+        assert!(last[0].contains("…  2 earlier"));
         assert!(last[6].contains("edge-8.example.com"));
+        assert!(last[6].contains(&super::PROMPT_ACCENT.to_string()));
     }
 
     fn press(dashboard: &mut Dashboard, code: KeyCode) -> Intent {
@@ -1674,6 +1730,23 @@ mod tests {
             .collect()
     }
 
+    fn visible_text(value: &str) -> String {
+        let mut visible = String::new();
+        let mut escape = false;
+        for character in value.chars() {
+            if escape {
+                if character == 'm' {
+                    escape = false;
+                }
+            } else if character == '\x1b' {
+                escape = true;
+            } else {
+                visible.push(character);
+            }
+        }
+        visible
+    }
+
     #[test]
     #[ignore = "visual inspection only"]
     fn prompt_snapshot() {
@@ -1710,7 +1783,8 @@ mod tests {
 
         assert!(!view.scrolls());
         assert_eq!(view.lines(&rows).len(), 4);
-        assert!(view.hint().contains("1-4 jump"));
+        assert!(view.hint().contains("1-4"));
+        assert!(view.hint().contains("jump"));
         assert!(!view.hint().contains(" of "));
     }
 
@@ -1721,12 +1795,13 @@ mod tests {
 
         assert!(view.scrolls());
         assert_eq!(view.lines(&rows).len(), super::MAX_VISIBLE);
-        assert!(view.hint().contains("1-9 jump"));
+        assert!(view.hint().contains("1-9"));
+        assert!(view.hint().contains("jump"));
         assert!(view.hint().contains("1 of 10"));
 
         view.select(9);
         assert_eq!(view.lines(&rows).len(), super::MAX_VISIBLE);
-        assert_eq!(view.hidden_below(), 0);
+        assert_eq!(view.offset + view.height, view.total);
         assert!(view.hint().contains("10 of 10"));
     }
 
@@ -1752,25 +1827,74 @@ mod tests {
     }
 
     #[test]
-    fn edge_rows_fade_only_where_content_is_hidden() {
+    fn scrolling_keeps_every_service_row_at_the_same_visual_weight() {
+        let rows = sample_rows(10);
+        let mut view = super::View::new(rows.len());
+        let faded = super::PROMPT_FADED.to_string();
+
+        assert!(view.lines(&rows).iter().all(|line| !line.contains(&faded)));
+
+        view.select(9);
+        assert!(view.lines(&rows).iter().all(|line| !line.contains(&faded)));
+    }
+
+    #[test]
+    fn service_origins_stay_left_aligned_while_scrolling() {
         let rows = sample_rows(10);
         let mut view = super::View::new(rows.len());
 
-        let lines = view.lines(&rows);
-        let faded = super::PROMPT_FADED.to_string();
-        assert!(!lines[0].contains(&faded), "nothing hidden above");
-        assert!(lines[super::MAX_VISIBLE - 1].contains(&faded));
-
-        view.select(9);
-        let lines = view.lines(&rows);
-        assert!(lines[0].contains(&faded), "rows hidden above");
-        assert!(!lines[super::MAX_VISIBLE - 1].contains(&faded));
+        for selected in [0, 5, 9] {
+            view.select(selected);
+            let columns = view
+                .lines(&rows)
+                .iter()
+                .filter_map(|line| {
+                    let line = visible_text(line);
+                    line.find(':').map(|column| line[..column].chars().count())
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                columns.iter().all(|column| *column == columns[0]),
+                "{columns:?}"
+            );
+        }
     }
 
     #[test]
     fn header_counts_exactly_what_the_list_shows() {
-        assert_eq!(super::prompt_header(1), "Found 1 local service\n");
-        assert_eq!(super::prompt_header(10), "Found 10 local services\n");
+        let one = super::prompt_header(1);
+        let many = super::prompt_header(10);
+
+        assert!(one.starts_with('\n'));
+        assert!(one.ends_with("\n\n"));
+        assert!(one.contains("gnar"));
+        assert!(one.contains("● DISCOVERED"));
+        assert!(one.contains("1 local service"));
+        assert!(many.contains("10 local services"));
+        assert!(many.contains(&super::PROMPT_MUTED.to_string()));
+    }
+
+    #[test]
+    fn selector_chrome_uses_weighted_muted_controls_and_gaps() {
+        let rows = sample_rows(4);
+        let view = View::new(rows.len());
+        let mut services = Vec::new();
+        super::redraw_rows(&mut services, &rows, &view).unwrap();
+        let services = String::from_utf8(services).unwrap();
+
+        assert!(services.starts_with("\r\x1b[5A"));
+        assert!(services.contains("\x1b[2K\r\n\x1b[2K  "));
+        assert!(services.contains(&super::PROMPT_KEY.to_string()));
+        assert!(services.contains(&super::PROMPT_MUTED.to_string()));
+
+        let edges = vec!["https://edge.example.com".to_string()];
+        let mut edge = Vec::new();
+        super::redraw_edges(&mut edge, &edges, &View::new(edges.len())).unwrap();
+        let edge = String::from_utf8(edge).unwrap();
+
+        assert!(edge.starts_with("\r\x1b[2A"));
+        assert!(edge.contains("ENTER"));
+        assert!(edge.contains("connect"));
     }
 
     #[test]
@@ -1928,6 +2052,8 @@ mod tests {
         assert!(screen.contains("200"));
         assert!(screen.contains("RESPONSE"));
         assert!(screen.contains("users"));
+        assert!(screen.contains("TAB req/res"));
+        assert!(screen.contains("SPACE hold"));
         assert!(screen.contains("q quit"));
     }
 

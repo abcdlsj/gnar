@@ -42,12 +42,13 @@ CELL_W, LINE_H, PAD, CHROME = 8.4, 19.0, 16.0, 28.0
 def colour(name):
     if name in PALETTE:
         return PALETTE[name]
-    if len(name) == 6:
+    value = name.removeprefix("#")
+    if len(value) == 6:
         try:
-            int(name, 16)
+            int(value, 16)
         except ValueError:
             return FOREGROUND
-        return "#7d8590" if name.lower() == "0d1117" else f"#{name}"
+        return "#7d8590" if value.lower() == "0d1117" else f"#{value}"
     return FOREGROUND
 
 
@@ -140,7 +141,9 @@ def capture(args, interact, columns=COLS, rows=ROWS):
             os.dup2(follower, target)
         os.close(controller)
         os.close(follower)
-        os.execv(BINARY, [BINARY, *args])
+        environment = os.environ.copy()
+        environment.pop("NO_COLOR", None)
+        os.execve(BINARY, [BINARY, *args], environment)
     os.close(follower)
     fd = controller
     os.set_blocking(fd, False)
@@ -296,4 +299,3 @@ if __name__ == "__main__":
         raise SystemExit(f"{BINARY} is missing; run `cargo build --release` first")
     shoot_inspector()
     shoot_discovery()
-

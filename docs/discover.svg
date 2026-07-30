@@ -1,37 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="738" height="250" viewBox="0 0 738 250" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13">
-<rect width="738" height="250" rx="8" fill="#0d1117"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="738" height="307" viewBox="0 0 738 307" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13">
+<rect width="738" height="307" rx="8" fill="#0d1117"/>
 <circle cx="22" cy="16" r="5.5" fill="#ff5f57"/>
 <circle cx="37" cy="16" r="5.5" fill="#febc2e"/>
 <circle cx="52" cy="16" r="5.5" fill="#28c840"/>
 <text x="369" y="20" fill="#7d8590" font-size="11" text-anchor="middle">gnar — discover and identify</text>
 <text x="16.0" y="57" fill="#e6edf3" xml:space="preserve">Searching for a local HTTP service</text>
-<text x="16.0" y="76" fill="#e6edf3" xml:space="preserve">Found 13 local services</text>
-<text x="16.0" y="95" fill="#7ee787" xml:space="preserve">›</text>
-<text x="41.2" y="95" fill="#7d8590" xml:space="preserve">1</text>
-<text x="58.0" y="95" fill="#7ee787" font-weight="700" xml:space="preserve">Ollama</text>
-<text x="242.8" y="95" fill="#79c0ff" xml:space="preserve">:11434</text>
-<text x="310.0" y="95" fill="#7d8590" xml:space="preserve">ollama</text>
-<text x="41.2" y="114" fill="#7d8590" xml:space="preserve">2</text>
-<text x="58.0" y="114" fill="#e6edf3" xml:space="preserve">Express</text>
-<text x="242.8" y="114" fill="#79c0ff" xml:space="preserve">:14122</text>
-<text x="310.0" y="114" fill="#7d8590" xml:space="preserve">Sub Store</text>
-<text x="41.2" y="133" fill="#7d8590" xml:space="preserve">3</text>
-<text x="58.0" y="133" fill="#e6edf3" xml:space="preserve">web app</text>
-<text x="251.2" y="133" fill="#79c0ff" xml:space="preserve">:4173</text>
-<text x="310.0" y="133" fill="#7d8590" xml:space="preserve">Infer Lab · 手点一遍 Transformer</text>
-<text x="41.2" y="152" fill="#7d8590" xml:space="preserve">4</text>
-<text x="58.0" y="152" fill="#e6edf3" xml:space="preserve">JSON API</text>
-<text x="251.2" y="152" fill="#79c0ff" xml:space="preserve">:9090</text>
-<text x="310.0" y="152" fill="#7d8590" xml:space="preserve">mihomo</text>
-<text x="41.2" y="171" fill="#7d8590" xml:space="preserve">5</text>
-<text x="58.0" y="171" fill="#e6edf3" xml:space="preserve">JSON API</text>
-<text x="242.8" y="171" fill="#79c0ff" xml:space="preserve">:38324</text>
-<text x="310.0" y="171" fill="#7d8590" xml:space="preserve">Clash Party</text>
-<text x="41.2" y="190" fill="#7d8590" xml:space="preserve">6</text>
-<text x="58.0" y="190" fill="#e6edf3" xml:space="preserve">Express</text>
-<text x="242.8" y="190" fill="#79c0ff" xml:space="preserve">:51741</text>
-<text x="310.0" y="190" fill="#7d8590" xml:space="preserve">Superset · HTTP 404</text>
-<text x="41.2" y="209" fill="#7d8590" xml:space="preserve">7 Rocket                :42950  ApifoxAppAgent · HTTP 404</text>
-<text x="32.8" y="228" fill="#e6edf3" xml:space="preserve">↑↓ select · 1-9 jump · enter publish · esc cancel</text>
-<text x="452.8" y="228" fill="#7d8590" xml:space="preserve">· 1 of 13</text>
+<text x="16.0" y="95" fill="#7ee787" font-weight="700" xml:space="preserve">gnar</text>
+<text x="66.4" y="95" fill="#7ee787" xml:space="preserve">● DISCOVERED</text>
+<text x="184.0" y="95" fill="#7d8590" xml:space="preserve">12 local services</text>
+<text x="16.0" y="133" fill="#7ee787" xml:space="preserve">›</text>
+<text x="41.2" y="133" fill="#7d8590" xml:space="preserve">1</text>
+<text x="58.0" y="133" fill="#7ee787" font-weight="700" xml:space="preserve">Ollama</text>
+<text x="142.0" y="133" fill="#79c0ff" xml:space="preserve">:11434</text>
+<text x="209.2" y="133" fill="#7d8590" xml:space="preserve">ollama</text>
+<text x="41.2" y="152" fill="#7d8590" xml:space="preserve">2</text>
+<text x="58.0" y="152" fill="#e6edf3" xml:space="preserve">Express</text>
+<text x="142.0" y="152" fill="#79c0ff" xml:space="preserve">:14122</text>
+<text x="209.2" y="152" fill="#7d8590" xml:space="preserve">Sub Store</text>
+<text x="41.2" y="171" fill="#7d8590" xml:space="preserve">3</text>
+<text x="58.0" y="171" fill="#e6edf3" xml:space="preserve">web app</text>
+<text x="142.0" y="171" fill="#79c0ff" xml:space="preserve">:4173</text>
+<text x="209.2" y="171" fill="#7d8590" xml:space="preserve">Infer Lab · 手点一遍 Transformer</text>
+<text x="41.2" y="190" fill="#7d8590" xml:space="preserve">4</text>
+<text x="58.0" y="190" fill="#e6edf3" xml:space="preserve">JSON API</text>
+<text x="142.0" y="190" fill="#79c0ff" xml:space="preserve">:9090</text>
+<text x="209.2" y="190" fill="#7d8590" xml:space="preserve">mihomo</text>
+<text x="41.2" y="209" fill="#7d8590" xml:space="preserve">5</text>
+<text x="58.0" y="209" fill="#e6edf3" xml:space="preserve">JSON API</text>
+<text x="142.0" y="209" fill="#79c0ff" xml:space="preserve">:38324</text>
+<text x="209.2" y="209" fill="#7d8590" xml:space="preserve">Clash Party</text>
+<text x="41.2" y="228" fill="#7d8590" xml:space="preserve">6</text>
+<text x="58.0" y="228" fill="#e6edf3" xml:space="preserve">Express</text>
+<text x="142.0" y="228" fill="#79c0ff" xml:space="preserve">:51741</text>
+<text x="209.2" y="228" fill="#7d8590" xml:space="preserve">Superset · HTTP 404</text>
+<text x="32.8" y="247" fill="#7d8590" xml:space="preserve">…  6 more</text>
+<text x="32.8" y="285" fill="#7d8590" font-weight="700" xml:space="preserve">↑↓</text>
+<text x="58.0" y="285" fill="#7d8590" xml:space="preserve">select</text>
+<text x="116.8" y="285" fill="#7d8590" xml:space="preserve">·</text>
+<text x="133.6" y="285" fill="#7d8590" font-weight="700" xml:space="preserve">1-9</text>
+<text x="167.2" y="285" fill="#7d8590" xml:space="preserve">jump</text>
+<text x="209.2" y="285" fill="#7d8590" xml:space="preserve">·</text>
+<text x="226.0" y="285" fill="#7d8590" font-weight="700" xml:space="preserve">ENTER</text>
+<text x="276.4" y="285" fill="#7d8590" xml:space="preserve">publish</text>
+<text x="343.6" y="285" fill="#7d8590" xml:space="preserve">·</text>
+<text x="360.4" y="285" fill="#7d8590" font-weight="700" xml:space="preserve">ESC</text>
+<text x="394.0" y="285" fill="#7d8590" xml:space="preserve">cancel</text>
+<text x="452.8" y="285" fill="#7d8590" xml:space="preserve">·</text>
+<text x="469.6" y="285" fill="#7d8590" xml:space="preserve">1 of 12</text>
 </svg>

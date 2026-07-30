@@ -31,14 +31,14 @@
 <rect x="16.0" y="462.0" width="705.6" height="19.0" fill="#0d1117"/>
 <rect x="16.0" y="481.0" width="705.6" height="19.0" fill="#0d1117"/>
 <text x="24.4" y="57" fill="#7ee787" font-weight="700" xml:space="preserve">gnar</text>
-<text x="74.8" y="57" fill="#7ee787" xml:space="preserve">● online</text>
-<text x="562.0" y="57" fill="#7d8590" xml:space="preserve">4/min · 4 captured</text>
+<text x="74.8" y="57" fill="#7ee787" xml:space="preserve">● ONLINE</text>
+<text x="562.0" y="57" fill="#7d8590" xml:space="preserve">4/min · 4 CAPTURED</text>
 <text x="24.4" y="95" fill="#7d8590" xml:space="preserve">↗</text>
 <text x="49.6" y="95" fill="#79c0ff" font-weight="700" xml:space="preserve">http://127.0.0.1:8980/t/warm-panda-42</text>
 <text x="24.4" y="114" fill="#7d8590" xml:space="preserve">↘  http://127.0.0.1:8981/</text>
 <text x="32.8" y="133" fill="#7d8590" font-weight="700" xml:space="preserve">REQUESTS</text>
 <text x="108.4" y="133" fill="#202730" xml:space="preserve">─────────────────────────────────────────────────────────────</text>
-<text x="629.2" y="133" fill="#7d8590" xml:space="preserve">following</text>
+<text x="629.2" y="133" fill="#7d8590" xml:space="preserve">FOLLOWING</text>
 <text x="24.4" y="152" fill="#e6edf3" font-weight="700" xml:space="preserve">› GET        /api/users</text>
 <text x="570.4" y="152" fill="#7ee787" font-weight="700" xml:space="preserve">200</text>
 <text x="688.0" y="152" fill="#7d8590" font-weight="700" xml:space="preserve">0ms</text>
@@ -47,17 +47,17 @@
 <text x="688.0" y="171" fill="#7d8590" xml:space="preserve">1ms</text>
 <text x="41.2" y="190" fill="#e6edf3" xml:space="preserve">POST       /webhooks/github</text>
 <text x="570.4" y="190" fill="#ff0000" xml:space="preserve">500</text>
-<text x="688.0" y="190" fill="#7d8590" xml:space="preserve">1ms</text>
+<text x="688.0" y="190" fill="#7d8590" xml:space="preserve">0ms</text>
 <text x="41.2" y="209" fill="#e6edf3" xml:space="preserve">GET        /api/users</text>
 <text x="570.4" y="209" fill="#7ee787" xml:space="preserve">200</text>
 <text x="688.0" y="209" fill="#7d8590" xml:space="preserve">0ms</text>
 <text x="32.8" y="228" fill="#7d8590" font-weight="700" xml:space="preserve">RESPONSE  GET /api/users</text>
 <text x="242.8" y="228" fill="#202730" xml:space="preserve">─────────────────────────────────────────</text>
-<text x="595.6" y="228" fill="#7d8590" xml:space="preserve">tab → request</text>
+<text x="595.6" y="228" fill="#7d8590" xml:space="preserve">TAB → request</text>
 <text x="24.4" y="247" fill="#7d8590" xml:space="preserve">server:</text>
 <text x="91.6" y="247" fill="#e6edf3" xml:space="preserve">BaseHTTP/0.6 Python/3.14.0</text>
 <text x="24.4" y="266" fill="#7d8590" xml:space="preserve">date:</text>
-<text x="74.8" y="266" fill="#e6edf3" xml:space="preserve">Thu, 30 Jul 2026 14:36:14 GMT</text>
+<text x="74.8" y="266" fill="#e6edf3" xml:space="preserve">Thu, 30 Jul 2026 18:07:36 GMT</text>
 <text x="24.4" y="285" fill="#7d8590" xml:space="preserve">content-type:</text>
 <text x="142.0" y="285" fill="#e6edf3" xml:space="preserve">application/json</text>
 <text x="24.4" y="304" fill="#7d8590" xml:space="preserve">content-length:</text>
@@ -73,7 +73,7 @@
 <text x="24.4" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">↑↓</text>
 <text x="49.6" y="494" fill="#7d8590" xml:space="preserve">select</text>
 <text x="108.4" y="494" fill="#202730" xml:space="preserve">·</text>
-<text x="125.2" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">tab</text>
+<text x="125.2" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">TAB</text>
 <text x="158.8" y="494" fill="#7d8590" xml:space="preserve">req/res</text>
 <text x="226.0" y="494" fill="#202730" xml:space="preserve">·</text>
 <text x="242.8" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">/</text>

@@ -1,0 +1,18 @@
+FROM alpine:3.22
+
+ARG TARGETARCH
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S gnar \
+    && adduser -S -G gnar -h /data gnar \
+    && mkdir -p /data \
+    && chown gnar:gnar /data
+COPY docker-context/linux-${TARGETARCH}/gnar /usr/local/bin/gnar
+
+WORKDIR /data
+VOLUME ["/data"]
+EXPOSE 8910
+USER gnar
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["gnar"]
+CMD ["serve", "--listen", "0.0.0.0:8910", "--public-url", "http://127.0.0.1:8910", "--database", "/data/gnar.db", "--anonymous-only", "--allow-public-bind"]

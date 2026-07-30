@@ -30,17 +30,14 @@ pub struct Cli {
         long,
         global = true,
         env = "GNAR_EDGE",
-        default_value = DEFAULT_EDGE,
         value_parser = parse_edge,
-        help = "Edge to publish through; a bare host defaults to http://"
+        help = "Edge to use; a bare host defaults to http://"
     )]
-    pub edge: String,
+    pub edge: Option<String>,
 
     #[arg(long, global = true)]
     pub name: Option<String>,
 }
-
-pub const DEFAULT_EDGE: &str = "https://edge.gnar.dev";
 
 fn parse_edge(value: &str) -> Result<String, String> {
     let value = value.trim().trim_end_matches('/');
@@ -86,8 +83,8 @@ mod tests {
     #[test]
     fn an_explicit_scheme_and_trailing_slash_are_preserved_or_trimmed() {
         assert_eq!(
-            parse_edge("https://edge.gnar.dev/").unwrap(),
-            "https://edge.gnar.dev"
+            parse_edge("https://gnar.example.com/").unwrap(),
+            "https://gnar.example.com"
         );
         assert_eq!(
             parse_edge(" http://127.0.0.1:8910 ").unwrap(),

@@ -22,6 +22,29 @@ pub fn token_for(edge: &str) -> Option<String> {
     credentials.edges.get(&key(edge)).cloned()
 }
 
+pub fn signed_in_edges() -> Vec<String> {
+    read()
+        .map(|credentials| credentials.edges.into_keys().collect())
+        .unwrap_or_default()
+}
+
+pub fn command_edge(explicit: Option<&str>) -> Result<String, AppError> {
+    if let Some(edge) = explicit {
+        return Ok(edge.to_string());
+    }
+    let mut edges = signed_in_edges();
+    match edges.len() {
+        1 => Ok(edges.remove(0)),
+        0 => Err(AppError::Edge(
+            "no edge server is available; self-host one with `gnar serve`, then pass its URL with --edge"
+                .into(),
+        )),
+        _ => Err(AppError::Edge(
+            "more than one edge is signed in; choose one with --edge or GNAR_EDGE".into(),
+        )),
+    }
+}
+
 pub async fn login(edge: &str) -> Result<(), AppError> {
     let client = Client::builder()
         .timeout(Duration::from_secs(15))
@@ -249,13 +272,9 @@ fn unreachable_edge(edge: &str, error: &reqwest::Error) -> AppError {
              its operator can enable them by restarting it with an approval secret"
         ));
     }
-    let advice = if edge.trim_end_matches('/') == crate::cli::DEFAULT_EDGE {
-        "the default hosted edge is not deployed yet; run `gnar serve` in another terminal \
-         and pass --edge http://127.0.0.1:8910, or set GNAR_EDGE"
-    } else {
-        "check that an edge is running there and reachable from this machine"
-    };
-    AppError::Edge(format!("could not reach {edge}: {advice}"))
+    AppError::Edge(format!(
+        "could not reach {edge}: check that an edge is running there and reachable from this machine"
+    ))
 }
 
 #[derive(Deserialize)]
@@ -291,7 +310,10 @@ mod tests {
 
     #[test]
     fn edge_key_ignores_a_trailing_slash() {
-        assert_eq!(key("https://edge.gnar.dev/"), key("https://edge.gnar.dev"));
+        assert_eq!(
+            key("https://gnar.example.com/"),
+            key("https://gnar.example.com")
+        );
     }
 
     #[test]
@@ -299,7 +321,7 @@ mod tests {
         let mut credentials = Credentials::default();
         credentials
             .edges
-            .insert(key("https://edge.gnar.dev"), "hosted".into());
+            .insert(key("https://gnar.example.com"), "remote".into());
         credentials
             .edges
             .insert(key("http://127.0.0.1:8910/"), "local".into());
@@ -307,12 +329,16 @@ mod tests {
         let encoded = serde_json::to_string(&credentials).unwrap();
         let decoded: Credentials = serde_json::from_str(&encoded).unwrap();
 
-        assert_eq!(decoded.edges["https://edge.gnar.dev"], "hosted");
+        assert_eq!(decoded.edges["https://gnar.example.com"], "remote");
         assert_eq!(decoded.edges["http://127.0.0.1:8910"], "local");
+        assert_eq!(
+            decoded.edges.into_keys().collect::<Vec<_>>(),
+            ["http://127.0.0.1:8910", "https://gnar.example.com"]
+        );
     }
 
     #[test]
-    fn unreadable_credentials_do_not_block_anonymous_use() {
+    fn invalid_credentials_do_not_create_available_edges() {
         let decoded: Credentials = serde_json::from_str("not json").unwrap_or_default();
 
         assert!(decoded.edges.is_empty());

@@ -28,7 +28,7 @@ impl App {
     pub async fn run(
         &self,
         input: Option<String>,
-        edge: String,
+        edge: Option<String>,
         name: Option<String>,
     ) -> Result<(), AppError> {
         let target = match input {
@@ -69,6 +69,9 @@ impl App {
                     status: response.status().as_u16(),
                     latency_ms: started.elapsed().as_millis(),
                 })?;
+                let Some(edge) = self.select_edge(edge)? else {
+                    return Ok(());
+                };
                 crate::tunnel::run(target.0, edge, name, &self.output).await
             }
             Err(error) => {
@@ -79,6 +82,26 @@ impl App {
                 })?;
                 Err(AppError::Unavailable)
             }
+        }
+    }
+
+    fn select_edge(&self, explicit: Option<String>) -> Result<Option<String>, AppError> {
+        if explicit.is_some() {
+            return Ok(explicit);
+        }
+        let mut edges = crate::account::signed_in_edges();
+        match edges.len() {
+            0 => Err(AppError::Edge(
+                "no edge server is available; self-host one with `gnar serve`, then sign in with `gnar login --edge <url>`"
+                    .into(),
+            )),
+            1 => Ok(edges.pop()),
+            _ if !self.output.interactive() => Err(AppError::Edge(
+                "more than one edge is signed in; choose one with --edge or GNAR_EDGE".into(),
+            )),
+            _ => crate::ui::choose_edge(&edges)
+                .map(|choice| choice.map(|index| edges[index].clone()))
+                .map_err(AppError::Output),
         }
     }
 }

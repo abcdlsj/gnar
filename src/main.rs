@@ -25,10 +25,21 @@ async fn main() -> ExitCode {
 
     let result = match cli.command {
         Some(Command::Serve(args)) => Edge::new(args).run().await,
-        Some(Command::Login) => account::login(&cli.edge).await,
-        Some(Command::Logout) => account::logout(&cli.edge),
-        Some(Command::Whoami) => account::whoami(&cli.edge).await,
-        Some(Command::Release { name }) => account::release(&cli.edge, &name).await,
+        Some(Command::Login) => match account::command_edge(cli.edge.as_deref()) {
+            Ok(edge) => account::login(&edge).await,
+            Err(error) => Err(error),
+        },
+        Some(Command::Logout) => {
+            account::command_edge(cli.edge.as_deref()).and_then(|edge| account::logout(&edge))
+        }
+        Some(Command::Whoami) => match account::command_edge(cli.edge.as_deref()) {
+            Ok(edge) => account::whoami(&edge).await,
+            Err(error) => Err(error),
+        },
+        Some(Command::Release { name }) => match account::command_edge(cli.edge.as_deref()) {
+            Ok(edge) => account::release(&edge, &name).await,
+            Err(error) => Err(error),
+        },
         Some(Command::Version) => {
             println!("gnar {}", env!("CARGO_PKG_VERSION"));
             Ok(())

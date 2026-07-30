@@ -131,6 +131,111 @@ pub fn choose_service(services: &[LocalService]) -> io::Result<Option<usize>> {
     Ok(choice)
 }
 
+pub fn choose_edge(edges: &[String]) -> io::Result<Option<usize>> {
+    if edges.is_empty() {
+        return Ok(None);
+    }
+    let mut stderr = io::stderr();
+    let mut view = View::new(edges.len());
+
+    writeln!(stderr, "Choose an edge")?;
+    for line in edge_lines(edges, &view) {
+        writeln!(stderr, "{line}")?;
+    }
+    write!(stderr, "{}", edge_hint(edges.len()))?;
+    stderr.flush()?;
+
+    enable_raw_mode()?;
+    let choice = loop {
+        let TerminalEvent::Key(key) = event::read()? else {
+            continue;
+        };
+        let before = (view.selected, view.offset);
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => view.select(view.selected.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => view.select(view.selected + 1),
+            KeyCode::Home | KeyCode::Char('g') => view.select(0),
+            KeyCode::End | KeyCode::Char('G') => view.select(edges.len() - 1),
+            KeyCode::Char(digit @ '1'..='9') => {
+                let index = digit as usize - '1' as usize;
+                if index < edges.len() {
+                    view.select(index);
+                    break Some(view.selected);
+                }
+            }
+            KeyCode::Enter => break Some(view.selected),
+            KeyCode::Esc | KeyCode::Char('q') => break None,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break None,
+            _ => {}
+        }
+        if (view.selected, view.offset) != before {
+            redraw_edges(&mut stderr, edges, &view)?;
+        }
+    };
+    let _ = disable_raw_mode();
+    finish_edge_prompt(&mut stderr, edges, &view, choice)?;
+    Ok(choice)
+}
+
+fn edge_lines(edges: &[String], view: &View) -> Vec<String> {
+    let width = edges.len().to_string().len();
+    (view.offset..view.offset + view.height)
+        .map(|index| {
+            let number = format!("{:>width$}", index + 1, width = width);
+            let fade = (index == view.offset && view.hidden_above() > 0)
+                || (index + 1 == view.offset + view.height && view.hidden_below() > 0);
+            if fade {
+                format!("  \x1b[2;90m{number} {}\x1b[0m", edges[index])
+            } else if index == view.selected {
+                format!(
+                    "\x1b[32m›\x1b[0m \x1b[90m{number}\x1b[0m \x1b[1;32m{}\x1b[0m",
+                    edges[index]
+                )
+            } else {
+                format!("  \x1b[90m{number}\x1b[0m {}", edges[index])
+            }
+        })
+        .collect()
+}
+
+fn edge_hint(count: usize) -> String {
+    format!(
+        "  ↑↓ select · 1-{} jump · enter connect · esc cancel",
+        count.min(9)
+    )
+}
+
+fn redraw_edges(writer: &mut impl Write, edges: &[String], view: &View) -> io::Result<()> {
+    write!(writer, "\r\x1b[{}A", view.height)?;
+    for line in edge_lines(edges, view) {
+        write!(writer, "\x1b[2K{line}\r\n")?;
+    }
+    write!(writer, "\x1b[2K{}", edge_hint(edges.len()))?;
+    writer.flush()
+}
+
+fn finish_edge_prompt(
+    writer: &mut impl Write,
+    edges: &[String],
+    view: &View,
+    choice: Option<usize>,
+) -> io::Result<()> {
+    write!(writer, "\r\x1b[{}A", view.height)?;
+    for _ in 0..view.height {
+        writeln!(writer, "\x1b[2K")?;
+    }
+    write!(writer, "\x1b[2K\r\x1b[{}A", view.height)?;
+    match choice {
+        Some(selected) => writeln!(
+            writer,
+            "\x1b[32m✓\x1b[0m Edge  \x1b[36m{}\x1b[0m",
+            edges[selected]
+        )?,
+        None => writeln!(writer, "Cancelled")?,
+    }
+    writer.flush()
+}
+
 const MAX_VISIBLE: usize = 7;
 
 struct View {
@@ -1340,7 +1445,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::{Dashboard, Intent, Pane, display_body, draw, sensitive_header};
+    use super::{Dashboard, Intent, Pane, View, display_body, draw, edge_lines, sensitive_header};
     use crate::protocol::{ClientFrame, EdgeFrame};
 
     fn dashboard() -> Dashboard {
@@ -1348,6 +1453,24 @@ mod tests {
             "https://example.test".into(),
             "http://127.0.0.1:3000".into(),
         )
+    }
+
+    #[test]
+    fn edge_selection_uses_a_bounded_window() {
+        let edges = (1..=8)
+            .map(|index| format!("https://edge-{index}.example.com"))
+            .collect::<Vec<_>>();
+        let mut view = View::new(edges.len());
+
+        let first = edge_lines(&edges, &view);
+        assert_eq!(first.len(), 7);
+        assert!(first[0].contains("edge-1.example.com"));
+        assert!(first[6].contains("\x1b[2;90m"));
+
+        view.select(7);
+        let last = edge_lines(&edges, &view);
+        assert!(last[0].contains("\x1b[2;90m"));
+        assert!(last[6].contains("edge-8.example.com"));
     }
 
     fn press(dashboard: &mut Dashboard, code: KeyCode) -> Intent {

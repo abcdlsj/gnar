@@ -31,7 +31,7 @@ async fn explicit_target_is_probed_before_edge_connection() {
     assert!(stdout.contains("HTTP 204"), "{stdout}");
 }
 
-async fn edge_failure(extra: &[&str]) -> String {
+async fn edge_failure(extra: &[&str], signed_in: &[&str]) -> String {
     // A reachable local target, so the run gets past the probe and fails at the edge.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -47,10 +47,28 @@ async fn edge_failure(extra: &[&str]) -> String {
 
     let mut args = vec![format!("http://{address}"), "--no-tui".to_string()];
     args.extend(extra.iter().map(ToString::to_string));
+    let config_dir = std::env::temp_dir().join(format!("gnar-probe-{}", address.port()));
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let edges = signed_in
+        .iter()
+        .map(|edge| {
+            (
+                (*edge).to_string(),
+                serde_json::Value::String("token".into()),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    std::fs::write(
+        config_dir.join("credentials.json"),
+        serde_json::to_vec(&serde_json::json!({ "edges": edges })).unwrap(),
+    )
+    .unwrap();
+    let command_config_dir = config_dir.clone();
     let output = tokio::task::spawn_blocking(move || {
         Command::new(env!("CARGO_BIN_EXE_gnar"))
             .args(&args)
             .env_remove("GNAR_EDGE")
+            .env("GNAR_CONFIG_DIR", command_config_dir)
             .output()
             .unwrap()
     })
@@ -58,24 +76,40 @@ async fn edge_failure(extra: &[&str]) -> String {
     .unwrap();
 
     serving.abort();
+    let _ = std::fs::remove_dir_all(config_dir);
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unreachable_edge_names_itself_and_a_next_step() {
-    let stderr = edge_failure(&[]).await;
+async fn no_available_edge_explains_how_to_self_host() {
+    let stderr = edge_failure(&[], &[]).await;
 
-    assert!(stderr.contains("edge.gnar.dev"), "{stderr}");
+    assert!(stderr.contains("no edge server is available"), "{stderr}");
     assert!(stderr.contains("gnar serve"), "{stderr}");
+    assert!(!stderr.contains("gnar.dev"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_signed_in_edge_is_selected_automatically() {
+    let stderr = edge_failure(&[], &["http://127.0.0.1:1"]).await;
+
+    assert!(stderr.contains("http://127.0.0.1:1"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn several_edges_require_an_explicit_choice_without_a_terminal() {
+    let stderr = edge_failure(&[], &["http://127.0.0.1:1", "http://127.0.0.1:2"]).await;
+
     assert!(
-        !stderr.contains("lookup address"),
-        "the resolver error must not reach the user: {stderr}"
+        stderr.contains("more than one edge is signed in"),
+        "{stderr}"
     );
+    assert!(stderr.contains("--edge"), "{stderr}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bare_host_and_port_is_accepted_as_an_edge() {
-    let stderr = edge_failure(&["--edge", "127.0.0.1:1"]).await;
+    let stderr = edge_failure(&["--edge", "127.0.0.1:1"], &[]).await;
 
     assert!(
         stderr.contains("http://127.0.0.1:1"),

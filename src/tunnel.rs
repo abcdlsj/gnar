@@ -343,21 +343,12 @@ fn unreachable_edge(
         .unwrap_or_default();
     let edge = format!("{scheme}://{host}{port}");
 
-    let advice = if host == default_edge_host() {
-        "the default hosted edge is not deployed yet; run `gnar serve` in another terminal \
-         and pass --edge http://127.0.0.1:8910, or set GNAR_EDGE"
-    } else if is_unresolved(error) {
+    let advice = if is_unresolved(error) {
         "check the address for a typo, or that its DNS name resolves from here"
     } else {
         "check that an edge is running there and reachable from this machine"
     };
     AppError::Edge(format!("could not reach {edge}: {advice}"))
-}
-
-fn default_edge_host() -> &'static str {
-    crate::cli::DEFAULT_EDGE
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
 }
 
 fn is_unresolved(error: &tokio_tungstenite::tungstenite::Error) -> bool {

@@ -1,0 +1,1019 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use rusqlite::{Connection, params};
+use tokio::sync::{mpsc, oneshot};
+
+const ENDPOINT_LIFETIME_SECONDS: i64 = 3600;
+const DEVICE_CODE_LIFETIME_SECONDS: i64 = 600;
+
+pub struct RequestRecord {
+    pub session_id: i64,
+    pub method: String,
+    pub status: u16,
+    pub duration_ms: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+}
+
+pub struct Account {
+    pub id: i64,
+    pub name: String,
+}
+
+pub struct DeviceCode {
+    pub device_code_hash: String,
+    pub user_code: String,
+}
+
+pub enum DeviceState {
+    Pending,
+    Approved { token: String, account: String },
+    Denied,
+    Expired,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum NameClaim {
+    Granted { endpoint_id: i64, reserved: bool },
+    Taken { owner: String },
+}
+
+enum Command {
+    ClaimEndpoint {
+        name: String,
+        account_id: Option<i64>,
+        reply: Reply<NameClaim>,
+    },
+    OpenSession(i64, Reply<i64>),
+    CloseSession(i64, String, Reply<()>),
+    RecordRequest(RequestRecord, Reply<()>),
+    AccountForToken(String, Reply<Option<Account>>),
+    StartDeviceAuthorization(DeviceCode, Reply<()>),
+    ApproveDeviceCode {
+        user_code: String,
+        account_name: String,
+        token_hash: String,
+        token: String,
+        reply: Reply<Option<String>>,
+    },
+    DenyDeviceCode(String, Reply<bool>),
+    PollDeviceCode(String, Reply<DeviceState>),
+    CountLiveTunnels(i64, Reply<usize>),
+    TakeRequestBudget {
+        endpoint_id: i64,
+        minute: i64,
+        limit: u32,
+        reply: Reply<bool>,
+    },
+    ReleaseEndpoint {
+        name: String,
+        account_id: i64,
+        reply: Reply<bool>,
+    },
+}
+
+type Reply<T> = oneshot::Sender<Result<T, String>>;
+
+#[derive(Clone)]
+pub struct Store {
+    commands: mpsc::Sender<Command>,
+}
+
+impl Store {
+    pub async fn open(path: PathBuf) -> Result<Self, String> {
+        let (commands, mut receiver) = mpsc::channel(64);
+        let (ready, opened) = oneshot::channel();
+
+        tokio::task::spawn_blocking(move || {
+            let connection = match open_connection(path) {
+                Ok(connection) => {
+                    let _ = ready.send(Ok(()));
+                    connection
+                }
+                Err(error) => {
+                    let _ = ready.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let mut issued = HashMap::new();
+            while let Some(command) = receiver.blocking_recv() {
+                apply(&connection, command, &mut issued);
+            }
+        });
+
+        opened.await.map_err(|_| worker_stopped())??;
+        Ok(Self { commands })
+    }
+
+    pub async fn claim_endpoint(
+        &self,
+        name: String,
+        account_id: Option<i64>,
+    ) -> Result<NameClaim, String> {
+        self.request(|reply| Command::ClaimEndpoint {
+            name,
+            account_id,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn release_endpoint(&self, name: String, account_id: i64) -> Result<bool, String> {
+        self.request(|reply| Command::ReleaseEndpoint {
+            name,
+            account_id,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn account_for_token(&self, token: &str) -> Result<Option<Account>, String> {
+        let hash = hash_secret(token);
+        self.request(|reply| Command::AccountForToken(hash, reply))
+            .await
+    }
+
+    pub async fn start_device_authorization(&self, code: DeviceCode) -> Result<(), String> {
+        self.request(|reply| Command::StartDeviceAuthorization(code, reply))
+            .await
+    }
+
+    pub async fn approve_device_code(
+        &self,
+        user_code: String,
+        account_name: String,
+        token: String,
+    ) -> Result<Option<String>, String> {
+        let token_hash = hash_secret(&token);
+        self.request(|reply| Command::ApproveDeviceCode {
+            user_code,
+            account_name,
+            token_hash,
+            token,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn deny_device_code(&self, user_code: String) -> Result<bool, String> {
+        self.request(|reply| Command::DenyDeviceCode(user_code, reply))
+            .await
+    }
+
+    pub async fn poll_device_code(&self, device_code: &str) -> Result<DeviceState, String> {
+        let hash = hash_secret(device_code);
+        self.request(|reply| Command::PollDeviceCode(hash, reply))
+            .await
+    }
+
+    pub async fn count_live_tunnels(&self, account_id: i64) -> Result<usize, String> {
+        self.request(|reply| Command::CountLiveTunnels(account_id, reply))
+            .await
+    }
+
+    pub async fn take_request_budget(
+        &self,
+        endpoint_id: i64,
+        minute: i64,
+        limit: u32,
+    ) -> Result<bool, String> {
+        self.request(|reply| Command::TakeRequestBudget {
+            endpoint_id,
+            minute,
+            limit,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn open_session(&self, endpoint_id: i64) -> Result<i64, String> {
+        self.request(|reply| Command::OpenSession(endpoint_id, reply))
+            .await
+    }
+
+    pub async fn close_session(
+        &self,
+        session_id: i64,
+        reason: impl Into<String>,
+    ) -> Result<(), String> {
+        self.request(|reply| Command::CloseSession(session_id, reason.into(), reply))
+            .await
+    }
+
+    pub async fn record_request(&self, record: RequestRecord) -> Result<(), String> {
+        self.request(|reply| Command::RecordRequest(record, reply))
+            .await
+    }
+
+    async fn request<T>(&self, command: impl FnOnce(Reply<T>) -> Command) -> Result<T, String> {
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(command(reply))
+            .await
+            .map_err(|_| worker_stopped())?;
+        response.await.map_err(|_| worker_stopped())?
+    }
+}
+
+fn worker_stopped() -> String {
+    "the edge database worker stopped; restart the edge".to_string()
+}
+
+pub fn hash_secret(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(secret.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn apply(connection: &Connection, command: Command, issued: &mut HashMap<String, String>) {
+    fn send<T>(reply: Reply<T>, result: rusqlite::Result<T>) {
+        let _ = reply.send(result.map_err(|error| error.to_string()));
+    }
+
+    match command {
+        Command::ClaimEndpoint {
+            name,
+            account_id,
+            reply,
+        } => send(reply, claim_endpoint(connection, &name, account_id)),
+        Command::ReleaseEndpoint {
+            name,
+            account_id,
+            reply,
+        } => send(reply, release_endpoint(connection, &name, account_id)),
+        Command::AccountForToken(hash, reply) => send(reply, account_for_token(connection, &hash)),
+        Command::StartDeviceAuthorization(code, reply) => {
+            send(reply, start_device_authorization(connection, &code));
+        }
+        Command::ApproveDeviceCode {
+            user_code,
+            account_name,
+            token_hash,
+            token,
+            reply,
+        } => {
+            let result = approve_device_code(connection, &user_code, &account_name, &token_hash);
+            if let Ok(Some(device_code_hash)) = &result {
+                issued.insert(device_code_hash.clone(), token);
+            }
+            send(reply, result.map(|hash| hash.map(|_| account_name)));
+        }
+        Command::DenyDeviceCode(user_code, reply) => {
+            send(reply, deny_device_code(connection, &user_code));
+        }
+        Command::PollDeviceCode(hash, reply) => {
+            let state = poll_device_code(connection, &hash).map(|state| match state {
+                DeviceState::Approved { account, .. } => match issued.remove(&hash) {
+                    Some(token) => DeviceState::Approved { token, account },
+                    None => DeviceState::Expired,
+                },
+                other => other,
+            });
+            send(reply, state);
+        }
+        Command::CountLiveTunnels(account_id, reply) => {
+            send(reply, count_live_tunnels(connection, account_id));
+        }
+        Command::TakeRequestBudget {
+            endpoint_id,
+            minute,
+            limit,
+            reply,
+        } => send(
+            reply,
+            take_request_budget(connection, endpoint_id, minute, limit),
+        ),
+        Command::OpenSession(endpoint_id, reply) => {
+            send(reply, open_session(connection, endpoint_id));
+        }
+        Command::CloseSession(session_id, reason, reply) => {
+            send(reply, close_session(connection, session_id, &reason));
+        }
+        Command::RecordRequest(record, reply) => {
+            send(reply, record_request(connection, &record));
+        }
+    }
+}
+
+fn release_endpoint(
+    connection: &Connection,
+    name: &str,
+    account_id: i64,
+) -> rusqlite::Result<bool> {
+    connection
+        .execute(
+            "UPDATE endpoints
+             SET account_id = NULL, kind = 'ephemeral', expires_at = unixepoch() + ?3
+             WHERE name = ?1 AND account_id = ?2",
+            params![name, account_id, ENDPOINT_LIFETIME_SECONDS],
+        )
+        .map(|rows| rows > 0)
+}
+
+fn start_device_authorization(connection: &Connection, code: &DeviceCode) -> rusqlite::Result<()> {
+    connection
+        .execute(
+            "INSERT INTO device_authorizations(
+                 device_code_hash, user_code, status, created_at, expires_at
+             ) VALUES (?1, ?2, 'pending', unixepoch(), unixepoch() + ?3)",
+            params![
+                code.device_code_hash,
+                code.user_code,
+                DEVICE_CODE_LIFETIME_SECONDS
+            ],
+        )
+        .map(|_| ())
+}
+
+fn deny_device_code(connection: &Connection, user_code: &str) -> rusqlite::Result<bool> {
+    connection
+        .execute(
+            "UPDATE device_authorizations SET status = 'denied'
+             WHERE user_code = ?1 AND status = 'pending'",
+            params![user_code],
+        )
+        .map(|rows| rows > 0)
+}
+
+fn count_live_tunnels(connection: &Connection, account_id: i64) -> rusqlite::Result<usize> {
+    connection.query_row(
+        "SELECT count(*) FROM tunnel_sessions s
+         JOIN endpoints e ON e.id = s.endpoint_id
+         WHERE e.account_id = ?1 AND s.disconnected_at IS NULL",
+        params![account_id],
+        |row| row.get(0),
+    )
+}
+
+fn close_session(connection: &Connection, session_id: i64, reason: &str) -> rusqlite::Result<()> {
+    connection
+        .execute(
+            "UPDATE tunnel_sessions
+             SET disconnected_at = unixepoch(), close_reason = ?1
+             WHERE id = ?2",
+            params![reason, session_id],
+        )
+        .map(|_| ())
+}
+
+fn record_request(connection: &Connection, record: &RequestRecord) -> rusqlite::Result<()> {
+    connection
+        .execute(
+            "INSERT INTO request_metrics(
+                 session_id, method, status, duration_ms, bytes_in, bytes_out, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch())",
+            params![
+                record.session_id,
+                record.method,
+                record.status,
+                record.duration_ms,
+                record.bytes_in,
+                record.bytes_out
+            ],
+        )
+        .map(|_| ())
+}
+
+fn open_connection(path: PathBuf) -> rusqlite::Result<Connection> {
+    let mut connection = Connection::open(path)?;
+    connection.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;",
+    )?;
+    migrate(&mut connection)?;
+    Ok(connection)
+}
+
+fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+             version INTEGER PRIMARY KEY,
+             applied_at INTEGER NOT NULL
+         );",
+    )?;
+    let current = connection.query_row(
+        "SELECT coalesce(max(version), 0) FROM schema_migrations",
+        [],
+        |row| row.get::<_, usize>(0),
+    )?;
+    const MIGRATIONS: [&str; 3] = [
+        "CREATE TABLE IF NOT EXISTS endpoints (
+             id INTEGER PRIMARY KEY,
+             name TEXT NOT NULL UNIQUE,
+             kind TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             expires_at INTEGER
+         );
+         CREATE TABLE IF NOT EXISTS tunnel_sessions (
+             id INTEGER PRIMARY KEY,
+             endpoint_id INTEGER NOT NULL REFERENCES endpoints(id),
+             connected_at INTEGER NOT NULL,
+             disconnected_at INTEGER,
+             close_reason TEXT
+         );",
+        "CREATE TABLE IF NOT EXISTS request_metrics (
+             id INTEGER PRIMARY KEY,
+             session_id INTEGER NOT NULL REFERENCES tunnel_sessions(id),
+             method TEXT NOT NULL,
+             status INTEGER NOT NULL,
+             duration_ms INTEGER NOT NULL,
+             bytes_in INTEGER NOT NULL,
+             bytes_out INTEGER NOT NULL,
+             created_at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS request_metrics_session_created
+             ON request_metrics(session_id, created_at);",
+        "CREATE TABLE IF NOT EXISTS accounts (
+             id INTEGER PRIMARY KEY,
+             name TEXT NOT NULL UNIQUE,
+             created_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS account_tokens (
+             id INTEGER PRIMARY KEY,
+             account_id INTEGER NOT NULL REFERENCES accounts(id),
+             token_hash TEXT NOT NULL UNIQUE,
+             label TEXT,
+             created_at INTEGER NOT NULL,
+             last_used_at INTEGER
+         );
+         CREATE TABLE IF NOT EXISTS device_authorizations (
+             id INTEGER PRIMARY KEY,
+             device_code_hash TEXT NOT NULL UNIQUE,
+             user_code TEXT NOT NULL UNIQUE,
+             account_id INTEGER REFERENCES accounts(id),
+             status TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             expires_at INTEGER NOT NULL
+         );
+         ALTER TABLE endpoints ADD COLUMN account_id INTEGER REFERENCES accounts(id);
+         CREATE TABLE IF NOT EXISTS request_quota (
+             endpoint_id INTEGER NOT NULL REFERENCES endpoints(id),
+             minute INTEGER NOT NULL,
+             requests INTEGER NOT NULL,
+             PRIMARY KEY (endpoint_id, minute)
+         ) WITHOUT ROWID;",
+    ];
+    for (index, migration) in MIGRATIONS.iter().enumerate().skip(current) {
+        let version = index + 1;
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(migration)?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, unixepoch())",
+            [version],
+        )?;
+        transaction.commit()?;
+    }
+    Ok(())
+}
+
+fn claim_endpoint(
+    connection: &Connection,
+    name: &str,
+    account_id: Option<i64>,
+) -> rusqlite::Result<NameClaim> {
+    let existing = connection
+        .query_row(
+            "SELECT e.id, e.account_id, coalesce(a.name, '')
+             FROM endpoints e LEFT JOIN accounts a ON a.id = e.account_id
+             WHERE e.name = ?1",
+            [name],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .ok();
+
+    if let Some((_, Some(owner_id), owner_name)) = &existing
+        && Some(*owner_id) != account_id
+    {
+        return Ok(NameClaim::Taken {
+            owner: owner_name.clone(),
+        });
+    }
+
+    let reserved = account_id.is_some();
+    let (kind, expires) = if reserved {
+        ("reserved", None)
+    } else {
+        ("ephemeral", Some(ENDPOINT_LIFETIME_SECONDS))
+    };
+    connection.execute(
+        "INSERT INTO endpoints(name, kind, account_id, created_at, expires_at)
+         VALUES (?1, ?2, ?3, unixepoch(),
+                 CASE WHEN ?4 IS NULL THEN NULL ELSE unixepoch() + ?4 END)
+         ON CONFLICT(name) DO UPDATE SET
+             kind = ?2,
+             account_id = ?3,
+             expires_at = CASE WHEN ?4 IS NULL THEN NULL ELSE unixepoch() + ?4 END",
+        params![name, kind, account_id, expires],
+    )?;
+    let endpoint_id =
+        connection.query_row("SELECT id FROM endpoints WHERE name = ?1", [name], |row| {
+            row.get(0)
+        })?;
+    Ok(NameClaim::Granted {
+        endpoint_id,
+        reserved,
+    })
+}
+
+fn account_for_token(connection: &Connection, hash: &str) -> rusqlite::Result<Option<Account>> {
+    let mut statement = connection.prepare(
+        "SELECT t.token_hash, a.id, a.name FROM accounts a
+         JOIN account_tokens t ON t.account_id = a.id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            Account {
+                id: row.get(1)?,
+                name: row.get(2)?,
+            },
+        ))
+    })?;
+
+    let mut found = None;
+    for row in rows {
+        let (candidate, account) = row?;
+        if constant_time_eq(&candidate, hash) {
+            found = Some(account);
+        }
+    }
+
+    if found.is_some() {
+        connection.execute(
+            "UPDATE account_tokens SET last_used_at = unixepoch() WHERE token_hash = ?1",
+            [hash],
+        )?;
+    }
+    Ok(found)
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    use subtle::ConstantTimeEq;
+
+    left.len() == right.len() && left.as_bytes().ct_eq(right.as_bytes()).into()
+}
+
+fn approve_device_code(
+    connection: &Connection,
+    user_code: &str,
+    account_name: &str,
+    token_hash: &str,
+) -> rusqlite::Result<Option<String>> {
+    let pending = connection
+        .query_row(
+            "SELECT device_code_hash FROM device_authorizations
+             WHERE user_code = ?1 AND status = 'pending' AND expires_at > unixepoch()",
+            [user_code],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    let Some(device_code_hash) = pending else {
+        return Ok(None);
+    };
+
+    connection.execute(
+        "INSERT INTO accounts(name, created_at) VALUES (?1, unixepoch())
+         ON CONFLICT(name) DO NOTHING",
+        [account_name],
+    )?;
+    let account_id: i64 = connection.query_row(
+        "SELECT id FROM accounts WHERE name = ?1",
+        [account_name],
+        |row| row.get(0),
+    )?;
+    connection.execute(
+        "INSERT INTO account_tokens(account_id, token_hash, label, created_at)
+         VALUES (?1, ?2, 'device', unixepoch())",
+        params![account_id, token_hash],
+    )?;
+    connection.execute(
+        "UPDATE device_authorizations SET status = 'approved', account_id = ?2
+         WHERE device_code_hash = ?1",
+        params![device_code_hash, account_id],
+    )?;
+    Ok(Some(device_code_hash))
+}
+
+fn poll_device_code(connection: &Connection, hash: &str) -> rusqlite::Result<DeviceState> {
+    let row = connection
+        .query_row(
+            "SELECT d.status, d.expires_at <= unixepoch(), coalesce(a.name, '')
+             FROM device_authorizations d
+             LEFT JOIN accounts a ON a.id = d.account_id
+             WHERE d.device_code_hash = ?1",
+            [hash],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .ok();
+    let Some((status, expired, account)) = row else {
+        return Ok(DeviceState::Expired);
+    };
+    Ok(match status.as_str() {
+        "denied" => DeviceState::Denied,
+        "approved" => DeviceState::Approved {
+            token: String::new(),
+            account,
+        },
+        _ if expired => DeviceState::Expired,
+        _ => DeviceState::Pending,
+    })
+}
+
+fn take_request_budget(
+    connection: &Connection,
+    endpoint_id: i64,
+    minute: i64,
+    limit: u32,
+) -> rusqlite::Result<bool> {
+    let used: u32 = connection
+        .query_row(
+            "SELECT requests FROM request_quota WHERE endpoint_id = ?1 AND minute = ?2",
+            params![endpoint_id, minute],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if used >= limit {
+        return Ok(false);
+    }
+    connection.execute(
+        "INSERT INTO request_quota(endpoint_id, minute, requests) VALUES (?1, ?2, 1)
+         ON CONFLICT(endpoint_id, minute) DO UPDATE SET requests = requests + 1",
+        params![endpoint_id, minute],
+    )?;
+    connection.execute(
+        "DELETE FROM request_quota WHERE endpoint_id = ?1 AND minute < ?2",
+        params![endpoint_id, minute - 2],
+    )?;
+    Ok(true)
+}
+
+fn open_session(connection: &Connection, endpoint_id: i64) -> rusqlite::Result<i64> {
+    connection.execute(
+        "INSERT INTO tunnel_sessions(endpoint_id, connected_at) VALUES (?1, unixepoch())",
+        [endpoint_id],
+    )?;
+    Ok(connection.last_insert_rowid())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceCode, DeviceState, NameClaim, RequestRecord, Store, hash_secret};
+
+    fn database(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("gnar-store-{label}-{}.db", std::process::id()))
+    }
+
+    async fn store(label: &str) -> (Store, std::path::PathBuf) {
+        let path = database(label);
+        let _ = std::fs::remove_file(&path);
+        let store = Store::open(path.clone()).await.unwrap();
+        (store, path)
+    }
+
+    fn endpoint_id(claim: NameClaim) -> i64 {
+        match claim {
+            NameClaim::Granted { endpoint_id, .. } => endpoint_id,
+            NameClaim::Taken { owner } => panic!("unexpectedly taken by {owner}"),
+        }
+    }
+
+    async fn sign_in(store: &Store, account: &str) -> i64 {
+        let user_code = format!("CODE-{account}");
+        store
+            .start_device_authorization(DeviceCode {
+                device_code_hash: hash_secret(&format!("device-{account}")),
+                user_code: user_code.clone(),
+            })
+            .await
+            .unwrap();
+        let token = format!("token-{account}");
+        store
+            .approve_device_code(user_code, account.into(), token.clone())
+            .await
+            .unwrap()
+            .expect("approval");
+        store.account_for_token(&token).await.unwrap().unwrap().id
+    }
+
+    #[tokio::test]
+    async fn lifecycle_is_recorded_and_endpoints_are_reused() {
+        let (store, path) = store("lifecycle").await;
+
+        let endpoint = endpoint_id(
+            store
+                .claim_endpoint("warm-panda-42".into(), None)
+                .await
+                .unwrap(),
+        );
+        let reopened = endpoint_id(
+            store
+                .claim_endpoint("warm-panda-42".into(), None)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(endpoint, reopened);
+
+        let session = store.open_session(endpoint).await.unwrap();
+        store
+            .record_request(RequestRecord {
+                session_id: session,
+                method: "GET".into(),
+                status: 200,
+                duration_ms: 18,
+                bytes_in: 0,
+                bytes_out: 12,
+            })
+            .await
+            .unwrap();
+        store.close_session(session, "disconnected").await.unwrap();
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let (status, reason): (u16, String) = connection
+            .query_row(
+                "SELECT m.status, s.close_reason
+                 FROM request_metrics m JOIN tunnel_sessions s ON s.id = m.session_id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(reason, "disconnected");
+
+        drop(connection);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn tokens_are_stored_only_as_hashes() {
+        let (store, path) = store("hashes").await;
+        sign_in(&store, "alice").await;
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let stored: String = connection
+            .query_row("SELECT token_hash FROM account_tokens", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, hash_secret("token-alice"));
+        assert_ne!(stored, "token-alice");
+
+        assert!(
+            store
+                .account_for_token("token-alice")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(store.account_for_token("wrong").await.unwrap().is_none());
+
+        drop(connection);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn an_approved_device_code_yields_its_token_once() {
+        let (store, path) = store("device-once").await;
+        store
+            .start_device_authorization(DeviceCode {
+                device_code_hash: hash_secret("device-1"),
+                user_code: "WDJB-MJHT".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            store.poll_device_code("device-1").await.unwrap(),
+            DeviceState::Pending
+        ));
+
+        store
+            .approve_device_code("WDJB-MJHT".into(), "alice".into(), "secret-token".into())
+            .await
+            .unwrap()
+            .expect("approval");
+
+        let state = store.poll_device_code("device-1").await.unwrap();
+        match state {
+            DeviceState::Approved { token, account } => {
+                assert_eq!(token, "secret-token");
+                assert_eq!(account, "alice");
+            }
+            _ => panic!("expected approval"),
+        }
+
+        assert!(
+            matches!(
+                store.poll_device_code("device-1").await.unwrap(),
+                DeviceState::Expired
+            ),
+            "a redeemed code must not hand out its token twice"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_or_denied_code_never_approves() {
+        let (store, path) = store("device-denied").await;
+        assert!(matches!(
+            store.poll_device_code("never-issued").await.unwrap(),
+            DeviceState::Expired
+        ));
+
+        store
+            .start_device_authorization(DeviceCode {
+                device_code_hash: hash_secret("device-2"),
+                user_code: "AAAA-BBBB".into(),
+            })
+            .await
+            .unwrap();
+        assert!(store.deny_device_code("AAAA-BBBB".into()).await.unwrap());
+        assert!(matches!(
+            store.poll_device_code("device-2").await.unwrap(),
+            DeviceState::Denied
+        ));
+        assert!(
+            store
+                .approve_device_code("AAAA-BBBB".into(), "mallory".into(), "t".into())
+                .await
+                .unwrap()
+                .is_none(),
+            "a denied code cannot later be approved"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn a_reserved_name_belongs_to_its_account() {
+        let (store, path) = store("reserved").await;
+        let alice = sign_in(&store, "alice").await;
+        let bob = sign_in(&store, "bob").await;
+
+        let claim = store
+            .claim_endpoint("checkout".into(), Some(alice))
+            .await
+            .unwrap();
+        assert!(matches!(claim, NameClaim::Granted { reserved: true, .. }));
+
+        assert_eq!(
+            store
+                .claim_endpoint("checkout".into(), Some(bob))
+                .await
+                .unwrap(),
+            NameClaim::Taken {
+                owner: "alice".into()
+            }
+        );
+        assert_eq!(
+            store.claim_endpoint("checkout".into(), None).await.unwrap(),
+            NameClaim::Taken {
+                owner: "alice".into()
+            },
+            "anonymous clients cannot take a reserved name"
+        );
+
+        assert!(matches!(
+            store
+                .claim_endpoint("checkout".into(), Some(alice))
+                .await
+                .unwrap(),
+            NameClaim::Granted { reserved: true, .. }
+        ));
+
+        assert!(
+            store
+                .release_endpoint("checkout".into(), alice)
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            store
+                .claim_endpoint("checkout".into(), Some(bob))
+                .await
+                .unwrap(),
+            NameClaim::Granted { reserved: true, .. }
+        ));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn a_reserved_endpoint_does_not_expire() {
+        let (store, path) = store("expiry").await;
+        let alice = sign_in(&store, "alice").await;
+        store
+            .claim_endpoint("stable".into(), Some(alice))
+            .await
+            .unwrap();
+        store
+            .claim_endpoint("temporary".into(), None)
+            .await
+            .unwrap();
+
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let mut statement = connection
+            .prepare("SELECT name, kind, expires_at IS NULL FROM endpoints ORDER BY name")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            vec![
+                ("stable".into(), "reserved".into(), true),
+                ("temporary".into(), "ephemeral".into(), false),
+            ]
+        );
+
+        drop(statement);
+        drop(connection);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn live_tunnels_are_counted_per_account() {
+        let (store, path) = store("tunnels").await;
+        let alice = sign_in(&store, "alice").await;
+        assert_eq!(store.count_live_tunnels(alice).await.unwrap(), 0);
+
+        let first = endpoint_id(
+            store
+                .claim_endpoint("one".into(), Some(alice))
+                .await
+                .unwrap(),
+        );
+        let second = endpoint_id(
+            store
+                .claim_endpoint("two".into(), Some(alice))
+                .await
+                .unwrap(),
+        );
+        let first_session = store.open_session(first).await.unwrap();
+        store.open_session(second).await.unwrap();
+        assert_eq!(store.count_live_tunnels(alice).await.unwrap(), 2);
+
+        store
+            .close_session(first_session, "disconnected")
+            .await
+            .unwrap();
+        assert_eq!(store.count_live_tunnels(alice).await.unwrap(), 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn request_budget_is_spent_per_minute_and_survives_restart() {
+        let (store, path) = store("budget").await;
+        let endpoint = endpoint_id(store.claim_endpoint("busy".into(), None).await.unwrap());
+
+        for allowed in 0..3 {
+            assert!(
+                store.take_request_budget(endpoint, 100, 3).await.unwrap(),
+                "request {allowed} is within the limit"
+            );
+        }
+        assert!(
+            !store.take_request_budget(endpoint, 100, 3).await.unwrap(),
+            "the fourth request exceeds a limit of 3"
+        );
+
+        assert!(
+            store.take_request_budget(endpoint, 101, 3).await.unwrap(),
+            "the next minute starts a fresh bucket"
+        );
+
+        drop(store);
+        let store = Store::open(path.clone()).await.unwrap();
+        assert!(
+            !store.take_request_budget(endpoint, 100, 3).await.unwrap(),
+            "a restart must not hand out a fresh allowance for a spent minute"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+}

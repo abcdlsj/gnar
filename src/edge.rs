@@ -1,0 +1,914 @@
+use std::collections::HashMap;
+use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Form, Request, State};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::response::{Html, IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
+use rand::Rng;
+use serde::Deserialize;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore, mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
+
+use crate::app::AppError;
+use crate::cli::{Quota, ServeArgs};
+use crate::protocol::{self, ClientFrame, EdgeFrame, OpenTunnel, TunnelOpened};
+use crate::store::{self, DeviceCode, DeviceState, NameClaim, RequestRecord, Store};
+
+const FRAME_QUEUE: usize = 128;
+const BODY_QUEUE: usize = 16;
+const MAX_CHUNK_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HEADERS: usize = 128;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+const MAX_CONCURRENT_EXCHANGES: usize = 64;
+const RESPONSE_HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub struct Edge {
+    config: ServeArgs,
+}
+
+#[derive(Clone)]
+struct EdgeState {
+    config: Arc<ServeArgs>,
+    public_url: String,
+    base_domain: Option<String>,
+    sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
+    store: Store,
+    next_request: Arc<AtomicU64>,
+}
+
+struct Session {
+    outgoing: mpsc::Sender<EdgeFrame>,
+    pending: Mutex<HashMap<u64, Arc<Pending>>>,
+    next_request: Arc<AtomicU64>,
+    concurrency: Arc<Semaphore>,
+    session_id: i64,
+    endpoint_id: i64,
+    requests_per_minute: u32,
+    store: Store,
+}
+
+struct Pending {
+    start: Mutex<Option<oneshot::Sender<Result<ResponseHead, String>>>>,
+    body: mpsc::Sender<Result<Bytes, io::Error>>,
+    _permit: OwnedSemaphorePermit,
+    method: String,
+    started: Instant,
+    status: AtomicU16,
+    bytes_in: AtomicU64,
+    bytes_out: AtomicU64,
+}
+
+struct ResponseHead {
+    status: u16,
+    headers: Vec<protocol::Header>,
+}
+
+impl Edge {
+    pub fn new(config: ServeArgs) -> Self {
+        Self { config }
+    }
+
+    pub async fn run(self) -> Result<(), AppError> {
+        let mut config = self.config;
+        if !config.listen.ip().is_loopback() && !config.allow_public_bind {
+            return Err(AppError::Edge(format!(
+                "refusing to bind {} because it is reachable from the network; \
+                 pass --allow-public-bind to accept that, and set --approval-secret \
+                 so the device page cannot create accounts on its own",
+                config.listen
+            )));
+        }
+        if config.approval_secret.is_none() && !config.anonymous_only {
+            config.approval_secret = ask_login_setup()?;
+        }
+
+        let config = Arc::new(config);
+        let store = Store::open(config.database.clone())
+            .await
+            .map_err(AppError::Edge)?;
+        let state = EdgeState {
+            public_url: config.public_url.trim_end_matches('/').to_string(),
+            base_domain: config.base_domain.clone(),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            store,
+            next_request: Arc::new(AtomicU64::new(1)),
+            config: config.clone(),
+        };
+        let app = Router::new()
+            .route("/healthz", get(|| async { "ok" }))
+            .route("/v1/tunnels", get(open_tunnel))
+            .route("/v1/device/code", post(request_device_code))
+            .route("/v1/device/token", post(redeem_device_code))
+            .route("/v1/account", get(describe_account))
+            .route("/v1/endpoints/release", post(release_endpoint))
+            .route("/device", get(device_page).post(approve_device_page))
+            .fallback(forward_public)
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind(config.listen)
+            .await
+            .map_err(|error| AppError::Edge(error.to_string()))?;
+
+        println!("gnar edge listening on {}", config.listen);
+        println!(
+            "  quotas   {} tunnels · {}/min signed in, {} tunnel · {}/min anonymous",
+            config.account_tunnels,
+            config.account_requests,
+            config.anonymous_tunnels,
+            config.anonymous_requests
+        );
+        match &config.approval_secret {
+            Some(_) => println!("  login    accounts require the approval secret at /device"),
+            None => println!("  login    disabled, this edge serves anonymous tunnels only"),
+        }
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .map_err(|error| AppError::Edge(error.to_string()))
+    }
+}
+
+fn ask_login_setup() -> Result<Option<String>, AppError> {
+    use std::io::IsTerminal;
+
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(None);
+    }
+    match crate::ui::choose_login_setup(&random_passphrase())
+        .map_err(|error| AppError::Edge(format!("could not read the login choice: {error}")))?
+    {
+        crate::ui::LoginSetup::Anonymous => Ok(None),
+        crate::ui::LoginSetup::Secret(secret) => Ok(Some(secret)),
+        crate::ui::LoginSetup::Cancelled => Err(AppError::Edge(
+            "cancelled before the edge started; pass --anonymous-only or --approval-secret \
+             to skip this question"
+                .into(),
+        )),
+    }
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+async fn open_tunnel(
+    websocket: WebSocketUpgrade,
+    State(state): State<EdgeState>,
+) -> impl IntoResponse {
+    websocket.on_upgrade(move |socket| serve_tunnel(socket, state))
+}
+
+struct Granted {
+    name: String,
+    endpoint_id: i64,
+    session_id: i64,
+    quota: Quota,
+}
+
+async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted> {
+    let Some(Ok(Message::Binary(message))) = socket.next().await else {
+        return None;
+    };
+    let open = protocol::decode::<OpenTunnel>(&message).ok()?;
+    if open.version != protocol::VERSION {
+        let _ = socket.send(Message::Close(None)).await;
+        return None;
+    }
+
+    let account = match &open.token {
+        Some(token) => match state.store.account_for_token(token).await {
+            Ok(Some(account)) => Some(account),
+            Ok(None) => {
+                reject(
+                    socket,
+                    "this edge does not recognize the stored token; run `gnar login` again",
+                )
+                .await;
+                return None;
+            }
+            Err(_) => return None,
+        },
+        None => None,
+    };
+
+    let quota = state.config.quota(account.is_some());
+    if let Some(account) = &account
+        && let Ok(live) = state.store.count_live_tunnels(account.id).await
+        && live >= quota.tunnels
+    {
+        reject(
+            socket,
+            &format!(
+                "account {} already has {live} of {} tunnels open; stop one and try again",
+                account.name, quota.tunnels
+            ),
+        )
+        .await;
+        return None;
+    }
+
+    let name = match open.name {
+        Some(name) if valid_name(&name) => name,
+        Some(_) => {
+            reject(
+                socket,
+                &format!(
+                    "--name must be 1 to {} lowercase letters, numbers, or hyphens",
+                    protocol::MAX_NAME_LENGTH
+                ),
+            )
+            .await;
+            return None;
+        }
+        None => random_name(),
+    };
+    let account_id = account.as_ref().map(|account| account.id);
+    let (endpoint_id, reserved) = match state.store.claim_endpoint(name.clone(), account_id).await {
+        Ok(NameClaim::Granted {
+            endpoint_id,
+            reserved,
+        }) => (endpoint_id, reserved),
+        Ok(NameClaim::Taken { owner }) => {
+            reject(
+                socket,
+                &format!("the name {name} is reserved by {owner}; choose another --name"),
+            )
+            .await;
+            return None;
+        }
+        Err(_) => return None,
+    };
+    let session_id = state.store.open_session(endpoint_id).await.ok()?;
+
+    let opened = protocol::encode(&protocol::OpenResult::Opened(TunnelOpened {
+        version: protocol::VERSION,
+        name: name.clone(),
+        public_url: public_url(state, &name),
+        account: account.map(|account| account.name),
+        reserved,
+    }))
+    .ok()?;
+    socket.send(Message::Binary(opened.into())).await.ok()?;
+
+    Some(Granted {
+        name,
+        endpoint_id,
+        session_id,
+        quota,
+    })
+}
+
+async fn serve_tunnel(mut socket: WebSocket, state: EdgeState) {
+    let Some(granted) = negotiate(&mut socket, &state).await else {
+        return;
+    };
+    let Granted {
+        name,
+        endpoint_id,
+        session_id,
+        quota,
+    } = granted;
+
+    let (outgoing, mut requests) = mpsc::channel(FRAME_QUEUE);
+    let session = Arc::new(Session {
+        outgoing,
+        pending: Mutex::new(HashMap::new()),
+        next_request: state.next_request.clone(),
+        concurrency: Arc::new(Semaphore::new(MAX_CONCURRENT_EXCHANGES)),
+        session_id,
+        endpoint_id,
+        requests_per_minute: quota.requests_per_minute,
+        store: state.store.clone(),
+    });
+    state
+        .sessions
+        .write()
+        .await
+        .insert(name.clone(), session.clone());
+
+    let (mut writer, mut reader) = socket.split();
+    loop {
+        tokio::select! {
+            frame = requests.recv() => {
+                let Some(frame) = frame else { break };
+                let Ok(bytes) = protocol::encode(&frame) else { break };
+                if writer.send(Message::Binary(bytes.into())).await.is_err() { break; }
+            }
+            message = reader.next() => {
+                let Some(Ok(Message::Binary(bytes))) = message else { break };
+                let Ok(frame) = protocol::decode::<ClientFrame>(&bytes) else { break };
+                handle_client_frame(&session, frame).await;
+            }
+        }
+    }
+
+    let abandoned = std::mem::take(&mut *session.pending.lock().await);
+    for pending in abandoned.into_values() {
+        pending
+            .respond(Err("the local service disconnected mid-request".into()))
+            .await;
+    }
+
+    let mut sessions = state.sessions.write().await;
+    if sessions
+        .get(&name)
+        .is_some_and(|current| Arc::ptr_eq(current, &session))
+    {
+        sessions.remove(&name);
+    }
+    drop(sessions);
+    let _ = state.store.close_session(session_id, "disconnected").await;
+}
+
+async fn handle_client_frame(session: &Session, frame: ClientFrame) {
+    match frame {
+        ClientFrame::Start {
+            id,
+            status,
+            headers,
+        } => {
+            let Some(pending) = session.pending(id).await else {
+                return;
+            };
+            pending.status.store(status, Ordering::Relaxed);
+            pending.respond(Ok(ResponseHead { status, headers })).await;
+        }
+        ClientFrame::Chunk { id, body } => {
+            let Some(pending) = session.pending(id).await else {
+                return;
+            };
+            pending
+                .bytes_out
+                .fetch_add(body.len() as u64, Ordering::Relaxed);
+            let _ = pending.body.send(Ok(Bytes::from(body))).await;
+        }
+        ClientFrame::End { id } => {
+            if let Some(pending) = session.take_pending(id).await {
+                record_request(session, pending, None).await;
+            }
+        }
+        ClientFrame::Error { id, reason } => {
+            if let Some(pending) = session.take_pending(id).await {
+                pending.respond(Err(reason)).await;
+                record_request(session, pending, Some(502)).await;
+            }
+        }
+    }
+}
+
+async fn record_request(session: &Session, pending: Arc<Pending>, status: Option<u16>) {
+    let _ = session
+        .store
+        .record_request(RequestRecord {
+            session_id: session.session_id,
+            method: pending.method.clone(),
+            status: status.unwrap_or_else(|| pending.status.load(Ordering::Relaxed)),
+            duration_ms: pending.started.elapsed().as_millis().min(u64::MAX.into()) as u64,
+            bytes_in: pending.bytes_in.load(Ordering::Relaxed),
+            bytes_out: pending.bytes_out.load(Ordering::Relaxed),
+        })
+        .await;
+}
+
+async fn forward_public(State(state): State<EdgeState>, request: Request) -> Response {
+    let header_bytes = request
+        .headers()
+        .iter()
+        .map(|(name, value)| name.as_str().len() + value.as_bytes().len())
+        .sum::<usize>();
+    if request.headers().len() > MAX_HEADERS || header_bytes > MAX_HEADER_BYTES {
+        return (
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            "request headers are too large",
+        )
+            .into_response();
+    }
+    let Some((name, forwarded_path)) = route(&state, &request) else {
+        return tunnel_page(
+            StatusCode::NOT_FOUND,
+            "Tunnel not found",
+            "Check the address and ask its owner to start gnar again.",
+        );
+    };
+    let Some(session) = state.sessions.read().await.get(&name).cloned() else {
+        return tunnel_page(
+            StatusCode::BAD_GATEWAY,
+            "Tunnel offline",
+            "This endpoint exists, but its local service is not connected.",
+        );
+    };
+    if !session.take_request_budget().await {
+        return tunnel_page(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit reached",
+            &format!(
+                "This tunnel is limited to {} requests per minute. Wait a moment and retry.",
+                session.requests_per_minute
+            ),
+        );
+    }
+    match session.forward(request, forwarded_path).await {
+        Ok(response) => response,
+        Err(reason) => tunnel_page(
+            StatusCode::BAD_GATEWAY,
+            "Local service unavailable",
+            &reason,
+        ),
+    }
+}
+
+async fn describe_account(State(state): State<EdgeState>, request: Request) -> Response {
+    let token = bearer_token(&request);
+    match state.store.account_for_token(&token).await {
+        Ok(Some(account)) => {
+            let quota = state.config.quota(true);
+            Json(serde_json::json!({
+                "account": account.name,
+                "tunnels": quota.tunnels,
+                "requests_per_minute": quota.requests_per_minute,
+            }))
+            .into_response()
+        }
+        Ok(None) => (StatusCode::UNAUTHORIZED, "unknown token").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not read account").into_response(),
+    }
+}
+
+async fn release_endpoint(State(state): State<EdgeState>, request: Request) -> Response {
+    let token = bearer_token(&request);
+    let Ok(Some(account)) = state.store.account_for_token(&token).await else {
+        return (StatusCode::UNAUTHORIZED, "unknown token").into_response();
+    };
+    let name = request
+        .uri()
+        .query()
+        .and_then(|query| {
+            query
+                .split('&')
+                .filter_map(|pair| pair.split_once('='))
+                .find(|(key, _)| *key == "name")
+                .map(|(_, value)| value.to_string())
+        })
+        .unwrap_or_default();
+
+    match state.store.release_endpoint(name, account.id).await {
+        Ok(true) => Json(serde_json::json!({ "released": true })).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            "that name is not reserved by this account",
+        )
+            .into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not release").into_response(),
+    }
+}
+
+fn bearer_token(request: &Request) -> String {
+    request
+        .headers()
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default()
+        .to_string()
+}
+
+async fn request_device_code(State(state): State<EdgeState>) -> Response {
+    if state.config.approval_secret.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            "this edge serves anonymous tunnels only; it cannot create accounts",
+        )
+            .into_response();
+    }
+    let device_code = random_secret();
+    let user_code = random_user_code();
+    let record = DeviceCode {
+        device_code_hash: store::hash_secret(&device_code),
+        user_code: user_code.clone(),
+    };
+    if state
+        .store
+        .start_device_authorization(record)
+        .await
+        .is_err()
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not start login").into_response();
+    }
+    Json(serde_json::json!({
+        "device_code": device_code,
+        "user_code": user_code,
+        "verification_uri": format!("{}/device", state.public_url),
+        "interval": 2,
+    }))
+    .into_response()
+}
+
+async fn redeem_device_code(
+    State(state): State<EdgeState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let Some(device_code) = body.get("device_code").and_then(|value| value.as_str()) else {
+        return (StatusCode::BAD_REQUEST, "device_code is required").into_response();
+    };
+    match state.store.poll_device_code(device_code).await {
+        Ok(DeviceState::Approved { token, account }) => {
+            Json(serde_json::json!({ "status": "approved", "token": token, "account": account }))
+                .into_response()
+        }
+        Ok(DeviceState::Pending) => {
+            Json(serde_json::json!({ "status": "pending" })).into_response()
+        }
+        Ok(DeviceState::Denied) => Json(serde_json::json!({ "status": "denied" })).into_response(),
+        Ok(DeviceState::Expired) => {
+            Json(serde_json::json!({ "status": "expired" })).into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "could not check login").into_response(),
+    }
+}
+
+async fn device_page(State(state): State<EdgeState>) -> Response {
+    if state.config.approval_secret.is_none() {
+        return device_html(
+            StatusCode::NOT_FOUND,
+            "<h1>Login is disabled</h1><p>This edge serves anonymous tunnels only. \
+             Its operator can enable accounts by restarting it with an approval secret.</p>",
+        );
+    }
+    device_html(
+        StatusCode::OK,
+        "<h1>Approve a device</h1>\
+         <p>Enter the code shown in your terminal.</p>\
+         <form method=post>\
+         <label>Code<input name=user_code required autocomplete=off autocapitalize=characters></label>\
+         <label>Account name<input name=account required autocomplete=off></label>\
+         <label>Approval secret<input name=secret type=password required autocomplete=off></label>\
+         <button name=action value=approve>Approve</button>\
+         <button name=action value=deny class=ghost>Deny</button>\
+         </form>",
+    )
+}
+
+async fn approve_device_page(
+    State(state): State<EdgeState>,
+    Form(form): Form<DeviceApproval>,
+) -> Response {
+    let Some(expected) = &state.config.approval_secret else {
+        return device_html(
+            StatusCode::NOT_FOUND,
+            "<h1>Login is disabled</h1><p>This edge serves anonymous tunnels only.</p>",
+        );
+    };
+    if !secrets_match(expected, &form.secret.clone().unwrap_or_default()) {
+        return device_html(
+            StatusCode::FORBIDDEN,
+            "<h1>Not approved</h1><p>The approval secret does not match.</p>",
+        );
+    }
+
+    let user_code = form.user_code.trim().to_ascii_uppercase();
+    if form.action.as_deref() == Some("deny") {
+        let _ = state.store.deny_device_code(user_code).await;
+        return device_html(
+            StatusCode::OK,
+            "<h1>Denied</h1><p>That device will not be signed in.</p>",
+        );
+    }
+
+    let account = form.account.trim().to_ascii_lowercase();
+    if !valid_name(&account) {
+        return device_html(
+            StatusCode::BAD_REQUEST,
+            "<h1>Not approved</h1><p>Use 1 to 48 lowercase letters, numbers, or hyphens \
+             for the account name.</p>",
+        );
+    }
+
+    let token = format!("gnar_{}", random_secret());
+    match state
+        .store
+        .approve_device_code(user_code, account.clone(), token)
+        .await
+    {
+        Ok(Some(_)) => device_html(
+            StatusCode::OK,
+            &format!(
+                "<h1>Approved</h1><p>Signed in as <b>{}</b>. Return to your terminal.</p>",
+                escape_html(&account)
+            ),
+        ),
+        Ok(None) => device_html(
+            StatusCode::NOT_FOUND,
+            "<h1>Not approved</h1><p>That code is unknown, already used, or expired.</p>",
+        ),
+        Err(_) => device_html(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "<h1>Not approved</h1><p>The edge could not complete the login.</p>",
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct DeviceApproval {
+    user_code: String,
+    #[serde(default)]
+    account: String,
+    #[serde(default)]
+    secret: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
+}
+
+fn secrets_match(expected: &str, provided: &str) -> bool {
+    use subtle::ConstantTimeEq;
+
+    expected.len() == provided.len() && expected.as_bytes().ct_eq(provided.as_bytes()).into()
+}
+
+fn device_html(status: StatusCode, body: &str) -> Response {
+    let page = format!(
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>\
+         <title>Sign in · gnar</title><style>\
+         body{{margin:0;background:#0d1117;color:#e6edf3;font:16px ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;min-height:100vh;place-items:center}}\
+         main{{width:min(420px,calc(100% - 48px))}}\
+         b.mark{{background:#7ee787;color:#0d1117;padding:5px 9px}}\
+         h1{{font-size:22px;margin:24px 0 10px}}p{{color:#8b949e;line-height:1.6}}\
+         label{{display:block;margin:14px 0 0;color:#8b949e;font-size:13px}}\
+         input{{width:100%;margin-top:6px;padding:9px;background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;font:inherit}}\
+         button{{margin:18px 8px 0 0;padding:9px 16px;background:#7ee787;color:#0d1117;border:0;border-radius:6px;font:inherit;font-weight:700;cursor:pointer}}\
+         button.ghost{{background:transparent;color:#8b949e;border:1px solid #30363d;font-weight:400}}\
+         </style><main><b class=mark>gnar</b>{body}</main>"
+    );
+    (status, Html(page)).into_response()
+}
+
+fn random_secret() -> String {
+    let mut rng = rand::rng();
+    (0..32)
+        .map(|_| char::from_digit(rng.random_range(0..16), 16).unwrap_or('0'))
+        .collect()
+}
+
+fn random_passphrase() -> String {
+    const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
+    let mut rng = rand::rng();
+    let mut groups = Vec::with_capacity(4);
+    for _ in 0..4 {
+        let group: String = (0..5)
+            .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
+            .collect();
+        groups.push(group);
+    }
+    groups.join("-")
+}
+
+fn random_user_code() -> String {
+    const ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
+    let mut rng = rand::rng();
+    let mut code = String::with_capacity(9);
+    for index in 0..8 {
+        if index == 4 {
+            code.push('-');
+        }
+        code.push(ALPHABET[rng.random_range(0..ALPHABET.len())] as char);
+    }
+    code
+}
+
+fn tunnel_page(status: StatusCode, title: &str, detail: &str) -> Response {
+    let title = escape_html(title);
+    let detail = escape_html(detail);
+    let body = format!(
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>{title} · gnar</title><style>body{{margin:0;background:#0d1117;color:#e6edf3;font:16px ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;min-height:100vh;place-items:center}}main{{width:min(560px,calc(100% - 48px))}}b{{background:#7ee787;color:#0d1117;padding:5px 9px}}h1{{font-size:24px;margin:28px 0 12px}}p{{color:#8b949e;line-height:1.6}}</style><main><b>gnar</b><h1>{title}</h1><p>{detail}</p></main>"
+    );
+    (status, Html(body)).into_response()
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+impl Session {
+    async fn forward(&self, request: Request, path: String) -> Result<Response, String> {
+        let permit = self
+            .concurrency
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "the tunnel closed while the request was queued".to_string())?;
+        let id = self.next_request.fetch_add(1, Ordering::Relaxed);
+        let method = request.method().to_string();
+        let headers = request
+            .headers()
+            .iter()
+            .filter(|(name, _)| !protocol::hop_by_hop_header(name.as_str()))
+            .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+            .collect();
+        let (start, response_start) = oneshot::channel();
+        let (body, response_body) = mpsc::channel(BODY_QUEUE);
+        let pending = Arc::new(Pending {
+            start: Mutex::new(Some(start)),
+            body,
+            _permit: permit,
+            method: method.clone(),
+            started: Instant::now(),
+            status: AtomicU16::new(0),
+            bytes_in: AtomicU64::new(0),
+            bytes_out: AtomicU64::new(0),
+        });
+        self.pending.lock().await.insert(id, pending.clone());
+        self.send(EdgeFrame::RequestStart {
+            id,
+            method,
+            path,
+            headers,
+        })
+        .await?;
+
+        let mut request_body = request.into_body().into_data_stream();
+        let mut request_bytes = 0;
+        while let Some(chunk) = request_body.next().await {
+            let chunk = chunk.map_err(|error| error.to_string())?;
+            request_bytes += chunk.len();
+            pending
+                .bytes_in
+                .store(request_bytes as u64, Ordering::Relaxed);
+            if request_bytes > MAX_REQUEST_BYTES {
+                return Err(self
+                    .cancel(
+                        id,
+                        &format!(
+                            "the request body exceeds the {} MiB edge limit",
+                            MAX_REQUEST_BYTES / (1024 * 1024)
+                        ),
+                    )
+                    .await);
+            }
+            for chunk in chunk.chunks(MAX_CHUNK_BYTES) {
+                self.send(EdgeFrame::RequestChunk {
+                    id,
+                    body: chunk.to_vec(),
+                })
+                .await?;
+            }
+        }
+        self.send(EdgeFrame::RequestEnd { id }).await?;
+
+        let head = match tokio::time::timeout(RESPONSE_HEAD_TIMEOUT, response_start).await {
+            Ok(Ok(Ok(head))) => head,
+            Ok(Ok(Err(reason))) => return Err(reason),
+            Ok(Err(_)) => return Err("the tunnel closed before the response arrived".into()),
+            Err(_) => {
+                return Err(self
+                    .cancel(
+                        id,
+                        &format!(
+                            "the local service did not respond within {}s",
+                            RESPONSE_HEAD_TIMEOUT.as_secs()
+                        ),
+                    )
+                    .await);
+            }
+        };
+        let mut response = Response::builder().status(head.status);
+        for (name, value) in head.headers {
+            if protocol::hop_by_hop_header(&name) {
+                continue;
+            }
+            if let (Ok(name), Ok(value)) =
+                (HeaderName::try_from(name), HeaderValue::from_bytes(&value))
+            {
+                response = response.header(name, value);
+            }
+        }
+        response
+            .body(Body::from_stream(ReceiverStream::new(response_body)))
+            .map_err(|error| error.to_string())
+    }
+
+    async fn send(&self, frame: EdgeFrame) -> Result<(), String> {
+        self.outgoing
+            .send(frame)
+            .await
+            .map_err(|_| "tunnel disconnected".to_string())
+    }
+
+    async fn pending(&self, id: u64) -> Option<Arc<Pending>> {
+        self.pending.lock().await.get(&id).cloned()
+    }
+
+    async fn take_pending(&self, id: u64) -> Option<Arc<Pending>> {
+        self.pending.lock().await.remove(&id)
+    }
+
+    async fn cancel(&self, id: u64, reason: &str) -> String {
+        self.take_pending(id).await;
+        let _ = self.send(EdgeFrame::Cancel { id }).await;
+        reason.to_string()
+    }
+
+    async fn take_request_budget(&self) -> bool {
+        self.store
+            .take_request_budget(self.endpoint_id, current_minute(), self.requests_per_minute)
+            .await
+            .unwrap_or(true)
+    }
+}
+
+fn current_minute() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64 / 60)
+        .unwrap_or_default()
+}
+
+async fn reject(socket: &mut WebSocket, reason: &str) {
+    let rejected = protocol::OpenResult::Rejected {
+        reason: reason.to_string(),
+    };
+    if let Ok(bytes) = protocol::encode(&rejected) {
+        let _ = socket.send(Message::Binary(bytes.into())).await;
+    }
+    let _ = socket.send(Message::Close(None)).await;
+}
+
+impl Pending {
+    async fn respond(&self, head: Result<ResponseHead, String>) {
+        if let Some(start) = self.start.lock().await.take() {
+            let _ = start.send(head);
+        }
+    }
+}
+
+fn route(state: &EdgeState, request: &Request) -> Option<(String, String)> {
+    if let Some(rest) = request.uri().path().strip_prefix("/t/") {
+        let (name, suffix) = rest.split_once('/').unwrap_or((rest, ""));
+        if !name.is_empty() {
+            let path = format!("/{suffix}");
+            let query = request
+                .uri()
+                .query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default();
+            return Some((name.to_string(), path + &query));
+        }
+    }
+
+    let base = state.base_domain.as_deref()?;
+    let host = request.headers().get("host")?.to_str().ok()?;
+    let host = host.split(':').next()?;
+    let name = host.strip_suffix(&format!(".{base}"))?;
+    Some((name.to_string(), request.uri().to_string()))
+}
+
+fn public_url(state: &EdgeState, name: &str) -> String {
+    if let Some(domain) = &state.base_domain {
+        let scheme = if state.public_url.starts_with("https://") {
+            "https"
+        } else {
+            "http"
+        };
+        return format!("{scheme}://{name}.{domain}");
+    }
+    format!("{}/t/{name}", state.public_url)
+}
+
+fn random_name() -> String {
+    const ADJECTIVES: [&str; 8] = [
+        "bright", "calm", "gentle", "lucky", "quiet", "swift", "warm", "wild",
+    ];
+    const ANIMALS: [&str; 8] = [
+        "bear", "fox", "hawk", "koala", "otter", "panda", "raven", "wolf",
+    ];
+    let mut rng = rand::rng();
+    format!(
+        "{}-{}-{}",
+        ADJECTIVES[rng.random_range(0..ADJECTIVES.len())],
+        ANIMALS[rng.random_range(0..ANIMALS.len())],
+        rng.random_range(10..100)
+    )
+}
+
+fn valid_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= protocol::MAX_NAME_LENGTH
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}

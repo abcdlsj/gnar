@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="738" height="516" viewBox="0 0 738 516" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13">
+<rect width="738" height="516" rx="8" fill="#0d1117"/>
+<circle cx="22" cy="16" r="5.5" fill="#ff5f57"/>
+<circle cx="37" cy="16" r="5.5" fill="#febc2e"/>
+<circle cx="52" cy="16" r="5.5" fill="#28c840"/>
+<text x="369" y="20" fill="#7d8590" font-size="11" text-anchor="middle">gnar — request inspector</text>
+<rect x="16.0" y="44.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="63.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="82.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="101.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="120.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="139.0" width="8.4" height="19.0" fill="#0d1117"/>
+<rect x="24.4" y="139.0" width="688.8" height="19.0" fill="#202730"/>
+<rect x="713.2" y="139.0" width="8.4" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="158.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="177.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="196.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="215.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="234.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="253.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="272.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="291.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="310.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="329.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="348.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="367.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="386.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="405.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="424.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="443.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="462.0" width="705.6" height="19.0" fill="#0d1117"/>
+<rect x="16.0" y="481.0" width="705.6" height="19.0" fill="#0d1117"/>
+<text x="24.4" y="57" fill="#7ee787" font-weight="700" xml:space="preserve">gnar</text>
+<text x="74.8" y="57" fill="#7ee787" xml:space="preserve">● online</text>
+<text x="562.0" y="57" fill="#7d8590" xml:space="preserve">4/min · 4 captured</text>
+<text x="24.4" y="95" fill="#7d8590" xml:space="preserve">↗</text>
+<text x="49.6" y="95" fill="#79c0ff" font-weight="700" xml:space="preserve">http://127.0.0.1:8980/t/warm-panda-42</text>
+<text x="24.4" y="114" fill="#7d8590" xml:space="preserve">↘  http://127.0.0.1:8981/</text>
+<text x="32.8" y="133" fill="#7d8590" font-weight="700" xml:space="preserve">REQUESTS</text>
+<text x="108.4" y="133" fill="#202730" xml:space="preserve">─────────────────────────────────────────────────────────────</text>
+<text x="629.2" y="133" fill="#7d8590" xml:space="preserve">following</text>
+<text x="24.4" y="152" fill="#e6edf3" font-weight="700" xml:space="preserve">› GET        /api/users</text>
+<text x="570.4" y="152" fill="#7ee787" font-weight="700" xml:space="preserve">200</text>
+<text x="688.0" y="152" fill="#7d8590" font-weight="700" xml:space="preserve">0ms</text>
+<text x="41.2" y="171" fill="#e6edf3" xml:space="preserve">GET        /health</text>
+<text x="570.4" y="171" fill="#7ee787" xml:space="preserve">200</text>
+<text x="688.0" y="171" fill="#7d8590" xml:space="preserve">1ms</text>
+<text x="41.2" y="190" fill="#e6edf3" xml:space="preserve">POST       /webhooks/github</text>
+<text x="570.4" y="190" fill="#ff0000" xml:space="preserve">500</text>
+<text x="688.0" y="190" fill="#7d8590" xml:space="preserve">1ms</text>
+<text x="41.2" y="209" fill="#e6edf3" xml:space="preserve">GET        /api/users</text>
+<text x="570.4" y="209" fill="#7ee787" xml:space="preserve">200</text>
+<text x="688.0" y="209" fill="#7d8590" xml:space="preserve">0ms</text>
+<text x="32.8" y="228" fill="#7d8590" font-weight="700" xml:space="preserve">RESPONSE  GET /api/users</text>
+<text x="242.8" y="228" fill="#202730" xml:space="preserve">─────────────────────────────────────────</text>
+<text x="595.6" y="228" fill="#7d8590" xml:space="preserve">tab → request</text>
+<text x="24.4" y="247" fill="#7d8590" xml:space="preserve">server:</text>
+<text x="91.6" y="247" fill="#e6edf3" xml:space="preserve">BaseHTTP/0.6 Python/3.14.0</text>
+<text x="24.4" y="266" fill="#7d8590" xml:space="preserve">date:</text>
+<text x="74.8" y="266" fill="#e6edf3" xml:space="preserve">Thu, 30 Jul 2026 14:36:14 GMT</text>
+<text x="24.4" y="285" fill="#7d8590" xml:space="preserve">content-type:</text>
+<text x="142.0" y="285" fill="#e6edf3" xml:space="preserve">application/json</text>
+<text x="24.4" y="304" fill="#7d8590" xml:space="preserve">content-length:</text>
+<text x="158.8" y="304" fill="#e6edf3" xml:space="preserve">33</text>
+<text x="24.4" y="342" fill="#e6edf3" xml:space="preserve">{</text>
+<text x="41.2" y="361" fill="#e6edf3" xml:space="preserve">"users": [</text>
+<text x="58.0" y="380" fill="#e6edf3" xml:space="preserve">{</text>
+<text x="74.8" y="399" fill="#e6edf3" xml:space="preserve">"id": 1,</text>
+<text x="74.8" y="418" fill="#e6edf3" xml:space="preserve">"name": "ada"</text>
+<text x="58.0" y="437" fill="#e6edf3" xml:space="preserve">}</text>
+<text x="41.2" y="456" fill="#e6edf3" xml:space="preserve">]</text>
+<text x="24.4" y="475" fill="#e6edf3" xml:space="preserve">}</text>
+<text x="24.4" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">↑↓</text>
+<text x="49.6" y="494" fill="#7d8590" xml:space="preserve">select</text>
+<text x="108.4" y="494" fill="#202730" xml:space="preserve">·</text>
+<text x="125.2" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">tab</text>
+<text x="158.8" y="494" fill="#7d8590" xml:space="preserve">req/res</text>
+<text x="226.0" y="494" fill="#202730" xml:space="preserve">·</text>
+<text x="242.8" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">/</text>
+<text x="259.6" y="494" fill="#7d8590" xml:space="preserve">filter</text>
+<text x="318.4" y="494" fill="#202730" xml:space="preserve">·</text>
+<text x="335.2" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">r</text>
+<text x="352.0" y="494" fill="#7d8590" xml:space="preserve">replay</text>
+<text x="410.8" y="494" fill="#202730" xml:space="preserve">·</text>
+<text x="427.6" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">e</text>
+<text x="444.4" y="494" fill="#7d8590" xml:space="preserve">curl</text>
+<text x="486.4" y="494" fill="#202730" xml:space="preserve">·</text>
+<text x="503.2" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">c</text>
+<text x="520.0" y="494" fill="#7d8590" xml:space="preserve">copy</text>
+<text x="562.0" y="494" fill="#202730" xml:space="preserve">·</text>
+<text x="578.8" y="494" fill="#7d8590" font-weight="700" xml:space="preserve">o</text>
+<text x="595.6" y="494" fill="#7d8590" xml:space="preserve">open</text>
+</svg>

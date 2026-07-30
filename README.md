@@ -333,6 +333,21 @@ The hosted edge is expected to terminate TLS and route `<name>.gnar.dev` to an a
 
 Self-hosted mode accepts a base domain and uses the same endpoint model. TLS termination and wildcard DNS belong to the operator's reverse proxy and do not leak into the client workflow.
 
+The published container image runs the edge as a non-root user and stores SQLite state in `/data`. Keep its HTTP listener on the host loopback interface and put an HTTPS reverse proxy in front of it:
+
+```console
+$ docker run -d --name gnar --restart unless-stopped \
+    -p 127.0.0.1:8910:8910 \
+    -v gnar-data:/data \
+    ghcr.io/abcdlsj/gnar:latest \
+    serve --listen 0.0.0.0:8910 \
+    --public-url https://gnar.example.com \
+    --database /data/gnar.db \
+    --anonymous-only --allow-public-bind
+```
+
+The reverse proxy must preserve WebSocket upgrades. Replace `gnar.example.com` with the public HTTPS host before starting the container.
+
 ### SQLite state
 
 SQLite is the only durable store in the first release. The edge keeps hot session routing in memory and writes durable ownership and lifecycle state to SQLite.

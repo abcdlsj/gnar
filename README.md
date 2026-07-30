@@ -14,6 +14,16 @@ Both images are generated from a real run by `docs/screenshot.py`; regenerate th
 
 This document is the single source of truth for the product and its architecture. If implementation and this document disagree, update the design decision here before changing behavior.
 
+## Install
+
+Install the latest release on macOS or Linux:
+
+```console
+$ curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/abcdlsj/gnar/master/install.sh | sh
+```
+
+The installer supports Apple Silicon Macs and x86_64 or arm64 Linux machines. It verifies the downloaded archive and installs `gnar` to `$HOME/.local/bin`. Set `GNAR_INSTALL_DIR` to choose another directory or `GNAR_VERSION` to install a specific release, such as `GNAR_VERSION=1.0.0`.
+
 ## Product promise
 
 The shortest path is `gnar` with no arguments.

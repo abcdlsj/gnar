@@ -17,11 +17,11 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 use url::Url;
 
 use crate::discover::LocalService;
-use crate::protocol::{ClientFrame, EdgeFrame, Header};
+use crate::protocol::{ClientFrame, EdgeFrame, ForwardSettings, Header};
 
 const MAX_EXCHANGES: usize = 500;
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
@@ -646,11 +646,14 @@ pub struct LiveUi {
     drawn: Instant,
 }
 
+#[derive(Debug)]
 pub enum Action {
     Quit,
     Replay(Replay),
+    ApplySettings(ForwardSettings),
 }
 
+#[derive(Debug)]
 pub struct Replay {
     pub id: u64,
     pub method: String,
@@ -659,18 +662,22 @@ pub struct Replay {
     pub body: Vec<u8>,
 }
 
+#[derive(Debug)]
 enum Intent {
     Quit,
     Replay,
     CopyUrl,
     OpenUrl,
     CopyCurl,
+    ApplySettings(ForwardSettings),
     None,
 }
 
 struct Dashboard {
     public_url: String,
     target: String,
+    settings: ForwardSettings,
+    settings_form: Option<SettingsForm>,
     exchanges: VecDeque<Exchange>,
     selected: usize,
     following: bool,
@@ -688,6 +695,12 @@ enum Pane {
     Response,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ExchangeKind {
+    Http,
+    WebSocket,
+}
+
 struct Notice {
     text: String,
     shown: Instant,
@@ -698,6 +711,11 @@ struct Exchange {
     id: u64,
     method: String,
     path: String,
+    kind: ExchangeKind,
+    frames_in: u64,
+    frames_out: u64,
+    bytes_in: u64,
+    bytes_out: u64,
     request_headers: Vec<Header>,
     request_body: Vec<u8>,
     response_headers: Vec<Header>,
@@ -710,7 +728,7 @@ struct Exchange {
 }
 
 impl LiveUi {
-    pub fn new(public_url: String, target: String) -> io::Result<Self> {
+    pub fn new(public_url: String, target: String, settings: ForwardSettings) -> io::Result<Self> {
         let screen = Screen::enter()?;
         let (keys, receiver) = mpsc::channel();
         std::thread::spawn(move || {
@@ -726,7 +744,7 @@ impl LiveUi {
         Ok(Self {
             screen,
             keys: receiver,
-            dashboard: Dashboard::new(public_url, target),
+            dashboard: Dashboard::new(public_url, target, settings),
             dirty: true,
             drawn: Instant::now(),
         })
@@ -746,6 +764,21 @@ impl LiveUi {
         self.dashboard.online = online;
         self.dashboard.notice =
             (!online).then(|| Notice::sticky("edge disconnected, reconnecting"));
+        self.dirty = true;
+    }
+
+    pub fn set_settings(&mut self, settings: &ForwardSettings) {
+        self.dashboard.settings.clone_from(settings);
+        if let Some(form) = &mut self.dashboard.settings_form {
+            form.settings.clone_from(settings);
+            form.editing = false;
+            form.draft.clear();
+        }
+        self.dirty = true;
+    }
+
+    pub fn notify(&mut self, text: impl Into<String>) {
+        self.dashboard.notice = Some(Notice::new(text));
         self.dirty = true;
     }
 
@@ -781,6 +814,7 @@ impl LiveUi {
                         });
                     }
                 }
+                Intent::ApplySettings(settings) => return Some(Action::ApplySettings(settings)),
                 Intent::None => {}
             }
         }
@@ -820,10 +854,12 @@ impl Notice {
 }
 
 impl Dashboard {
-    fn new(public_url: String, target: String) -> Self {
+    fn new(public_url: String, target: String, settings: ForwardSettings) -> Self {
         Self {
             public_url,
             target,
+            settings,
+            settings_form: None,
             exchanges: VecDeque::new(),
             selected: 0,
             following: true,
@@ -851,6 +887,26 @@ impl Dashboard {
                     headers.clone(),
                     Vec::new(),
                     false,
+                    ExchangeKind::Http,
+                ));
+                self.exchanges.truncate(MAX_EXCHANGES);
+                if self.following {
+                    self.select(0);
+                } else {
+                    self.selected = (self.selected + 1).min(MAX_EXCHANGES - 1);
+                }
+            }
+            EdgeFrame::WsStart {
+                id, path, headers, ..
+            } => {
+                self.exchanges.push_front(Exchange::new(
+                    *id,
+                    "WS".into(),
+                    path.clone(),
+                    headers.clone(),
+                    Vec::new(),
+                    false,
+                    ExchangeKind::WebSocket,
                 ));
                 self.exchanges.truncate(MAX_EXCHANGES);
                 if self.following {
@@ -862,6 +918,12 @@ impl Dashboard {
             EdgeFrame::RequestChunk { id, body } => {
                 if let Some(exchange) = self.exchange_mut(*id) {
                     capture(&mut exchange.request_body, body);
+                }
+            }
+            EdgeFrame::WsFrame { id, message } => {
+                if let Some(exchange) = self.exchange_mut(*id) {
+                    exchange.frames_in += 1;
+                    exchange.bytes_in += message.len() as u64;
                 }
             }
             EdgeFrame::RequestEnd { .. } => {}
@@ -878,7 +940,8 @@ impl Dashboard {
             ClientFrame::Start { id, .. }
             | ClientFrame::Chunk { id, .. }
             | ClientFrame::End { id }
-            | ClientFrame::Error { id, .. } => *id,
+            | ClientFrame::Error { id, .. }
+            | ClientFrame::WsFrame { id, .. } => *id,
         };
         let Some(exchange) = self.exchange_mut(id) else {
             return;
@@ -893,6 +956,10 @@ impl Dashboard {
             ClientFrame::Chunk { body, .. } => capture(&mut exchange.response_body, body),
             ClientFrame::End { .. } => exchange.finish(None),
             ClientFrame::Error { reason, .. } => exchange.finish(Some(reason.clone())),
+            ClientFrame::WsFrame { message, .. } => {
+                exchange.frames_out += 1;
+                exchange.bytes_out += message.len() as u64;
+            }
         }
     }
 
@@ -912,6 +979,22 @@ impl Dashboard {
     }
 
     fn key(&mut self, key: KeyEvent) -> Intent {
+        if let Some(form) = &mut self.settings_form {
+            return match form.key(key) {
+                FormIntent::Close => {
+                    self.settings_form = None;
+                    self.notice = Some(Notice::new("settings unchanged"));
+                    Intent::None
+                }
+                FormIntent::Saved(settings) => {
+                    self.settings_form = None;
+                    self.settings = settings.clone();
+                    self.notice = Some(Notice::new("settings saved; reconnecting tunnel"));
+                    Intent::ApplySettings(settings)
+                }
+                FormIntent::None => Intent::None,
+            };
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return if key.code == KeyCode::Char('c') {
                 Intent::Quit
@@ -941,6 +1024,9 @@ impl Dashboard {
             KeyCode::Char('c') => return Intent::CopyUrl,
             KeyCode::Char('o') => return Intent::OpenUrl,
             KeyCode::Char('e') => return Intent::CopyCurl,
+            KeyCode::Char('s') => {
+                self.settings_form = Some(SettingsForm::new(self.settings.clone()))
+            }
             KeyCode::Up | KeyCode::Char('k') => self.select(self.selected.saturating_sub(1)),
             KeyCode::Down | KeyCode::Char('j') => self.select(self.selected + 1),
             KeyCode::Home | KeyCode::Char('g') => self.select(0),
@@ -1000,6 +1086,7 @@ impl Dashboard {
             replay.headers.clone(),
             replay.body.clone(),
             true,
+            ExchangeKind::Http,
         ));
         self.exchanges.truncate(MAX_EXCHANGES);
         self.following = true;
@@ -1034,6 +1121,161 @@ impl Dashboard {
     }
 }
 
+#[derive(Debug)]
+enum FormIntent {
+    Close,
+    Saved(ForwardSettings),
+    None,
+}
+
+const SETTINGS_FIELDS: usize = 6;
+const SETTINGS_LABELS: [&str; SETTINGS_FIELDS] = [
+    "Preserve Host",
+    "WebSocket forwarding",
+    "Max request body",
+    "Response head timeout",
+    "Max concurrent exchanges",
+    "Requests per minute",
+];
+
+struct SettingsForm {
+    settings: ForwardSettings,
+    selected: usize,
+    editing: bool,
+    draft: String,
+}
+
+impl SettingsForm {
+    fn new(settings: ForwardSettings) -> Self {
+        Self {
+            settings,
+            selected: 0,
+            editing: false,
+            draft: String::new(),
+        }
+    }
+
+    fn key(&mut self, key: KeyEvent) -> FormIntent {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return match key.code {
+                KeyCode::Char('c') => FormIntent::Close,
+                KeyCode::Char('s') => FormIntent::Saved(self.settings.clone().clamped()),
+                _ => FormIntent::None,
+            };
+        }
+        if self.editing {
+            return match key.code {
+                KeyCode::Enter => {
+                    self.commit_edit();
+                    FormIntent::None
+                }
+                KeyCode::Esc => {
+                    self.editing = false;
+                    self.draft.clear();
+                    FormIntent::None
+                }
+                KeyCode::Backspace => {
+                    self.draft.pop();
+                    FormIntent::None
+                }
+                KeyCode::Char(character) if character.is_ascii_digit() => {
+                    self.draft.push(character);
+                    FormIntent::None
+                }
+                _ => FormIntent::None,
+            };
+        }
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.selected = self.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.selected = (self.selected + 1).min(SETTINGS_FIELDS - 1);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle_or_edit(),
+            KeyCode::Char('S') => return FormIntent::Saved(self.settings.clone().clamped()),
+            KeyCode::Esc | KeyCode::Char('q') => return FormIntent::Close,
+            _ => {}
+        }
+        FormIntent::None
+    }
+
+    fn toggle_or_edit(&mut self) {
+        match self.selected {
+            0 => self.settings.preserve_host = !self.settings.preserve_host,
+            1 => self.settings.websocket = !self.settings.websocket,
+            _index => {
+                self.editing = true;
+                self.draft.clear();
+            }
+        }
+    }
+
+    fn commit_edit(&mut self) {
+        let parsed = self.draft.parse::<u64>().ok();
+        match self.selected {
+            2 => {
+                if let Some(mib) = parsed {
+                    self.settings.max_request_bytes = mib.saturating_mul(1024 * 1024);
+                }
+            }
+            3 => {
+                if let Some(seconds) = parsed {
+                    self.settings.response_head_timeout_ms = seconds.saturating_mul(1000);
+                }
+            }
+            4 => {
+                if let Some(value) = parsed.and_then(|value| usize::try_from(value).ok()) {
+                    self.settings.max_concurrent_exchanges = value;
+                }
+            }
+            5 => {
+                if let Some(value) = parsed.and_then(|value| u32::try_from(value).ok()) {
+                    self.settings.requests_per_minute = value;
+                }
+            }
+            _ => {}
+        }
+        self.editing = false;
+        self.draft.clear();
+    }
+
+    fn number_value(&self, index: usize) -> String {
+        match index {
+            2 => (self.settings.max_request_bytes / (1024 * 1024)).to_string(),
+            3 => (self.settings.response_head_timeout_ms / 1000).to_string(),
+            4 => self.settings.max_concurrent_exchanges.to_string(),
+            5 => self.settings.requests_per_minute.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    fn display_value(&self, index: usize) -> String {
+        if self.editing && self.selected == index {
+            return format!("{}▌", self.draft);
+        }
+        match index {
+            0 => {
+                if self.settings.preserve_host {
+                    "ON".into()
+                } else {
+                    "OFF".into()
+                }
+            }
+            1 => {
+                if self.settings.websocket {
+                    "ON".into()
+                } else {
+                    "OFF".into()
+                }
+            }
+            2 => format!("{} MiB", self.number_value(index)),
+            3 => format!("{} s", self.number_value(index)),
+            index => self.number_value(index),
+        }
+    }
+}
+
 impl Exchange {
     fn new(
         id: u64,
@@ -1042,11 +1284,17 @@ impl Exchange {
         request_headers: Vec<Header>,
         request_body: Vec<u8>,
         replayed: bool,
+        kind: ExchangeKind,
     ) -> Self {
         Self {
             id,
             method,
             path,
+            kind,
+            frames_in: 0,
+            frames_out: 0,
+            bytes_in: 0,
+            bytes_out: 0,
             request_headers,
             request_body,
             response_headers: Vec::new(),
@@ -1111,6 +1359,62 @@ fn draw(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard) {
     draw_requests(frame, dashboard, requests);
     draw_detail(frame, dashboard, detail);
     draw_footer(frame, dashboard, footer);
+    if dashboard.settings_form.is_some() {
+        draw_settings_form(frame, dashboard, frame.area());
+    }
+}
+
+fn draw_settings_form(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect) {
+    let width = 68.min(area.width.saturating_sub(4));
+    let height = (SETTINGS_FIELDS as u16 + 5).min(area.height.saturating_sub(4));
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SELECTION))
+        .title(Span::styled(
+            " FORWARD SETTINGS ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    let form = dashboard
+        .settings_form
+        .as_ref()
+        .expect("settings form drawn while open");
+    let rows = (0..SETTINGS_FIELDS).map(|index| {
+        Row::new([
+            Cell::from(SETTINGS_LABELS[index]),
+            Cell::from(form.display_value(index)),
+        ])
+        .style(if index == form.selected {
+            Style::default().bg(SELECTION).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        })
+    });
+    let table = Table::new(rows, [Constraint::Length(26), Constraint::Min(8)]).column_spacing(2);
+    let [table_area, hint_area] = Layout::vertical([
+        Constraint::Length(SETTINGS_FIELDS as u16),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    frame.render_widget(table, table_area);
+    let hint = if form.editing {
+        "ENTER apply · ESC cancel edit"
+    } else {
+        "↑↓ select · ENTER toggle/edit · S save · ESC cancel"
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(hint, Style::default().fg(MUTED))).right_aligned(),
+        hint_area,
+    );
 }
 
 fn pad(area: Rect) -> Rect {
@@ -1204,10 +1508,15 @@ fn draw_requests(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Re
     }
 
     let rows = visible.iter().map(|exchange| {
-        let method = if exchange.replayed {
-            format!("↻ {}", exchange.method)
+        let method = if exchange.kind == ExchangeKind::WebSocket {
+            "WS".to_string()
         } else {
             exchange.method.clone()
+        };
+        let method = if exchange.replayed {
+            format!("↻ {method}")
+        } else {
+            method
         };
         Row::new([
             Cell::from(method).style(Style::default().fg(if exchange.replayed {
@@ -1276,7 +1585,23 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
             ])
         })
         .collect::<Vec<_>>();
-    if let Some(error) = &exchange.error {
+    if exchange.kind == ExchangeKind::WebSocket {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            format!(
+                "IN   {} frames · {} bytes from public",
+                exchange.frames_in, exchange.bytes_in
+            ),
+            Style::default().fg(MUTED),
+        ));
+        lines.push(Line::styled(
+            format!(
+                "OUT  {} frames · {} bytes to public",
+                exchange.frames_out, exchange.bytes_out
+            ),
+            Style::default().fg(MUTED),
+        ));
+    } else if let Some(error) = &exchange.error {
         lines.push(Line::raw(""));
         lines.push(Line::styled(
             error.clone(),
@@ -1343,6 +1668,7 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, dashboard: &Dashboard, area: Rect
         ("↑↓", "select"),
         ("TAB", "req/res"),
         ("/", "filter"),
+        ("s", "settings"),
         ("r", "replay"),
         ("e", "curl"),
         ("c", "copy"),
@@ -1521,13 +1847,17 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    use super::{Dashboard, Intent, Pane, View, display_body, draw, edge_lines, sensitive_header};
-    use crate::protocol::{ClientFrame, EdgeFrame};
+    use super::{
+        Dashboard, ExchangeKind, Intent, Pane, View, display_body, draw, edge_lines,
+        sensitive_header,
+    };
+    use crate::protocol::{ClientFrame, EdgeFrame, ForwardSettings, WsMessage};
 
     fn dashboard() -> Dashboard {
         Dashboard::new(
             "https://example.test".into(),
             "http://127.0.0.1:3000".into(),
+            ForwardSettings::default(),
         )
     }
 
@@ -1966,7 +2296,7 @@ mod tests {
     }
 
     fn render(dashboard: &Dashboard) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal.draw(|frame| draw(frame, dashboard)).unwrap();
         terminal
             .backend()
@@ -2098,5 +2428,91 @@ mod tests {
         dashboard.filter = "nothing".into();
         let screen = render(&dashboard);
         assert!(screen.contains("No request matches this filter."));
+    }
+
+    #[test]
+    fn s_opens_settings_and_save_applies_them() {
+        let mut dashboard = dashboard();
+
+        assert!(matches!(
+            press(&mut dashboard, KeyCode::Char('s')),
+            Intent::None
+        ));
+        assert!(dashboard.settings_form.is_some());
+
+        press(&mut dashboard, KeyCode::Enter);
+        let saved = press(&mut dashboard, KeyCode::Char('S'));
+
+        match saved {
+            Intent::ApplySettings(settings) => {
+                assert!(!settings.preserve_host);
+                assert!(settings.websocket);
+            }
+            _ => panic!("expected ApplySettings, got {saved:?}"),
+        }
+        assert!(dashboard.settings_form.is_none());
+        assert!(!dashboard.settings.preserve_host);
+    }
+
+    #[test]
+    fn esc_discards_settings() {
+        let mut dashboard = dashboard();
+
+        press(&mut dashboard, KeyCode::Char('s'));
+        press(&mut dashboard, KeyCode::Enter);
+        assert!(matches!(press(&mut dashboard, KeyCode::Esc), Intent::None));
+
+        assert!(dashboard.settings_form.is_none());
+        assert!(dashboard.settings.preserve_host);
+    }
+
+    #[test]
+    fn number_fields_edit_with_digits_and_enter() {
+        let mut dashboard = dashboard();
+
+        press(&mut dashboard, KeyCode::Char('s'));
+        for _ in 0..2 {
+            press(&mut dashboard, KeyCode::Down);
+        }
+        press(&mut dashboard, KeyCode::Enter);
+        for digit in "128".chars().map(KeyCode::Char) {
+            press(&mut dashboard, digit);
+        }
+        press(&mut dashboard, KeyCode::Enter);
+        let saved = press(&mut dashboard, KeyCode::Char('S'));
+
+        match saved {
+            Intent::ApplySettings(settings) => {
+                assert_eq!(settings.max_request_bytes, 128 * 1024 * 1024);
+            }
+            _ => panic!("expected ApplySettings"),
+        }
+    }
+
+    #[test]
+    fn websocket_exchange_tracks_frames_and_counts() {
+        let mut dashboard = dashboard();
+        dashboard.apply_edge(&EdgeFrame::WsStart {
+            id: 9,
+            path: "/v1/ws".into(),
+            headers: vec![],
+            protocol: None,
+        });
+        dashboard.apply_edge(&EdgeFrame::WsFrame {
+            id: 9,
+            message: WsMessage::Text("hello".into()),
+        });
+        dashboard.apply_client(&ClientFrame::WsFrame {
+            id: 9,
+            message: WsMessage::Binary(vec![1, 2, 3]),
+        });
+
+        let exchange = dashboard.selection().unwrap();
+        assert_eq!(exchange.method, "WS");
+        assert_eq!(exchange.kind, ExchangeKind::WebSocket);
+        assert_eq!(exchange.frames_in, 1);
+        assert_eq!(exchange.bytes_in, 5);
+        assert_eq!(exchange.frames_out, 1);
+        assert_eq!(exchange.bytes_out, 3);
     }
 }

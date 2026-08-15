@@ -6,6 +6,7 @@ use url::Url;
 
 use crate::discover;
 use crate::output::{Event, Output};
+use crate::protocol::ForwardSettings;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -30,6 +31,7 @@ impl App {
         input: Option<String>,
         edge: Option<String>,
         name: Option<String>,
+        settings: ForwardSettings,
     ) -> Result<(), AppError> {
         let target = match input {
             Some(input) => Target::parse(&input)?,
@@ -72,7 +74,7 @@ impl App {
                 let Some(edge) = self.select_edge(edge)? else {
                     return Ok(());
                 };
-                crate::tunnel::run(target.0, edge, name, &self.output).await
+                crate::tunnel::run(target.0, edge, name, settings, &self.output).await
             }
             Err(error) => {
                 let reason = probe_reason(&error);

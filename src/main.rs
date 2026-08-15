@@ -51,7 +51,12 @@ async fn main() -> ExitCode {
             println!("gnar {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        None => App::new(output).run(cli.target, cli.edge, cli.name).await,
+        None => {
+            let settings = cli.settings();
+            App::new(output)
+                .run(cli.target, cli.edge, cli.name, settings)
+                .await
+        }
     };
 
     if let Err(error) = result {

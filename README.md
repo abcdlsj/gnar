@@ -1,6 +1,6 @@
 # gnar
 
-gnar publishes a local HTTP service to the internet and shows incoming requests in an interactive terminal inspector.
+gnar publishes a local HTTP service to the internet and shows incoming requests in an interactive terminal inspector. HTTP requests keep their original Host header by default, and WebSocket connections are relayed in both directions.
 
 Run `gnar` without a target to discover local services:
 
@@ -78,6 +78,12 @@ Common options:
 --edge <url>                  use a specific edge
 --no-tui                      use streaming plain output
 --json                        emit newline-delimited JSON events
+--preserve-host <bool>        keep the original Host header (default true)
+--websocket <bool>            relay WebSocket connections (default true)
+--max-request-mib <mib>       request body limit for this tunnel (default 16)
+--response-timeout-secs <s>   local response head timeout (default 30)
+--max-concurrent <n>          concurrent exchanges per tunnel (default 64)
+--requests-per-minute <n>     request budget per tunnel (default 600)
 ```
 
 A bare edge such as `127.0.0.1:8910` uses HTTP. Public edge servers should use HTTPS.
@@ -116,8 +122,31 @@ The interactive inspector provides these actions:
 - Replay a request against the local service.
 - Export a request as a curl command.
 - Copy or open the public URL.
+- Press `s` to edit per-tunnel forward settings.
 
 Use `--no-tui` for stable plain output. Use `--json` for newline-delimited JSON events.
+
+## Forward settings
+
+Press `s` in the inspector to open the forward settings form. Toggle boolean
+fields with ENTER, edit numeric fields with digits and ENTER, then save with
+`S` (or Ctrl+S). Saving reconnects the tunnel so the new limits apply to every
+exchange.
+
+- **Preserve Host**: keep the original Host header when forwarding. When off,
+  the header is rewritten to the local target.
+- **WebSocket forwarding**: accept public WebSocket upgrades and relay frames
+  in both directions.
+- **Max request body**: defaults to 16 MiB; the edge clamps requests to
+  [1 MiB, 256 MiB].
+- **Response head timeout**: defaults to 30 seconds; the edge clamps to
+  [1, 300] seconds.
+- **Max concurrent exchanges**: defaults to 64; the edge clamps to [1, 512].
+- **Requests per minute**: defaults to 600; the edge clamps to the account or
+  anonymous quota.
+
+The same values are available as command-line options, which is useful for
+non-interactive runs.
 
 ## Self-host an edge
 
@@ -167,6 +196,7 @@ The edge limits device-code creation, approval attempts, and repeated requests f
 ## Security and privacy
 
 - The edge does not store request or response bodies.
+- WebSocket frames are relayed in memory and never persisted by the edge.
 - Diagnostic logs do not contain request bodies, response bodies, or tokens.
 - The inspector redacts common credential headers and JSON fields.
 - Account tokens and device codes are stored as hashes on the edge.

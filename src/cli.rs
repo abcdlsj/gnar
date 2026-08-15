@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::protocol::ForwardSettings;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "gnar",
@@ -37,6 +39,71 @@ pub struct Cli {
 
     #[arg(long, global = true)]
     pub name: Option<String>,
+
+    #[arg(
+        long,
+        global = true,
+        num_args = 1,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        default_value_t = true,
+        help = "Preserve the original Host header when forwarding"
+    )]
+    pub preserve_host: bool,
+
+    #[arg(
+        long,
+        global = true,
+        num_args = 1,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        default_value_t = true,
+        help = "Forward WebSocket connections"
+    )]
+    pub websocket: bool,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = 16,
+        help = "Maximum request body in MiB"
+    )]
+    pub max_request_mib: u64,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = 30,
+        help = "Response head timeout in seconds"
+    )]
+    pub response_timeout_secs: u64,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = 64,
+        help = "Maximum concurrent exchanges"
+    )]
+    pub max_concurrent: usize,
+
+    #[arg(
+        long,
+        global = true,
+        default_value_t = 600,
+        help = "Requests per minute for this tunnel"
+    )]
+    pub requests_per_minute: u32,
+}
+
+impl Cli {
+    pub fn settings(&self) -> ForwardSettings {
+        ForwardSettings {
+            preserve_host: self.preserve_host,
+            websocket: self.websocket,
+            max_request_bytes: self.max_request_mib.saturating_mul(1024 * 1024),
+            response_head_timeout_ms: self.response_timeout_secs.saturating_mul(1000),
+            max_concurrent_exchanges: self.max_concurrent,
+            requests_per_minute: self.requests_per_minute,
+        }
+    }
 }
 
 fn parse_edge(value: &str) -> Result<String, String> {

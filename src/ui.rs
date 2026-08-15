@@ -553,6 +553,7 @@ fn read_secret(writer: &mut io::Stderr, generated: &str) -> io::Result<Option<St
 
 struct ServiceRow {
     kind: String,
+    protocol: Option<&'static str>,
     origin: String,
     detail: String,
 }
@@ -567,6 +568,7 @@ fn service_rows(services: &[LocalService]) -> Vec<ServiceRow> {
         .iter()
         .map(|service| ServiceRow {
             kind: format!("{:<width$}", service.kind, width = width),
+            protocol: service.protocol,
             origin: origin(&service.url),
             detail: match (&service.detail, service.status) {
                 (Some(detail), 200..=299) => detail.clone(),
@@ -606,6 +608,9 @@ fn prompt_row(row: &ServiceRow, index: usize, width: usize, selected: bool) -> S
     ));
     if !row.detail.is_empty() {
         line.push_str(&format!("  {PROMPT_MUTED}{}{PROMPT_MUTED:#}", row.detail));
+    }
+    if let Some(protocol) = row.protocol {
+        line.push_str(&format!("  {PROMPT_ORIGIN}[{protocol}]{PROMPT_ORIGIN:#}"));
     }
     line
 }
@@ -2047,22 +2052,28 @@ mod tests {
 
     fn sample_rows(count: usize) -> Vec<super::ServiceRow> {
         let services = [
-            ("Next.js", ":3000", "Acme Checkout"),
-            ("Vite", ":5173", "Infer Lab · 手点一遍 Transformer"),
-            ("Ollama", ":11434", "ollama"),
-            ("JSON API", ":9090", "mihomo"),
-            ("Express", ":14122", "Sub Store"),
-            ("Gunicorn", ":8000", "internal API · HTTP 404"),
-            ("web app", ":4173", "preview build"),
-            ("Flask", ":5001", "webhook sink"),
-            ("JSON API", ":38324", "Clash Party"),
-            ("nginx", ":8080", "static site"),
+            ("Next.js", None, ":3000", "Acme Checkout"),
+            (
+                "Vite",
+                Some("WS"),
+                ":5173",
+                "Infer Lab · 手点一遍 Transformer",
+            ),
+            ("Ollama", Some("gRPC"), ":11434", "ollama"),
+            ("JSON API", None, ":9090", "mihomo"),
+            ("Express", None, ":14122", "Sub Store"),
+            ("Gunicorn", None, ":8000", "internal API · HTTP 404"),
+            ("web app", Some("SSE"), ":4173", "preview build"),
+            ("Flask", None, ":5001", "webhook sink"),
+            ("JSON API", None, ":38324", "Clash Party"),
+            ("nginx", None, ":8080", "static site"),
         ];
         services
             .iter()
             .take(count)
-            .map(|(kind, origin, detail)| super::ServiceRow {
+            .map(|(kind, protocol, origin, detail)| super::ServiceRow {
                 kind: format!("{kind:<8}"),
+                protocol: *protocol,
                 origin: origin.to_string(),
                 detail: detail.to_string(),
             })
@@ -2197,6 +2208,16 @@ mod tests {
                 "{columns:?}"
             );
         }
+    }
+
+    #[test]
+    fn protocol_badges_render_after_the_row() {
+        let rows = sample_rows(3);
+        let line = visible_text(&super::prompt_row(&rows[1], 1, 1, false));
+
+        assert!(line.contains("[WS]"));
+        assert!(!line.contains("[gRPC]"));
+        assert!(line.contains(":5173"));
     }
 
     #[test]

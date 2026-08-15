@@ -41,6 +41,9 @@ Start a local application, then run:
 $ gnar
 ```
 
+The discovery list marks services that answer WebSocket upgrades, speak gRPC,
+or stream Server-Sent Events with a small `[WS]`, `[gRPC]`, or `[SSE]` badge.
+
 You can also provide a port, URL, or endpoint name:
 
 ```console

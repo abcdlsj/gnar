@@ -12,6 +12,7 @@ use url::Url;
 use crate::app::AppError;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_millis(450);
+const PROTOCOL_TIMEOUT: Duration = Duration::from_millis(250);
 const COMMON_PORTS: [u16; 8] = [3000, 5173, 8000, 8080, 4200, 5000, 3001, 8888];
 const MAX_FINGERPRINT_BYTES: usize = 16 * 1024;
 const MAX_DETAIL_CHARS: usize = 48;
@@ -22,6 +23,7 @@ pub struct LocalService {
     pub kind: String,
     pub detail: Option<String>,
     pub status: u16,
+    pub protocol: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +38,7 @@ struct Probe {
     status: u16,
     server: Option<String>,
     powered_by: Option<String>,
+    content_type: Option<String>,
     body: String,
 }
 
@@ -57,10 +60,13 @@ async fn find(client: &Client, candidates: Vec<Candidate>) -> Vec<LocalService> 
         probes.spawn(async move {
             let url = Url::parse(&format!("http://127.0.0.1:{}/", candidate.port)).unwrap();
             let probe = tokio::time::timeout(DISCOVERY_TIMEOUT, probe(&client, &url)).await;
-            match probe {
-                Ok(Some(probe)) => Some((candidate, url, probe)),
-                _ => None,
-            }
+            let probe = probe.ok().flatten()?;
+            let protocol =
+                tokio::time::timeout(PROTOCOL_TIMEOUT, protocol_probe(&client, &url, &probe))
+                    .await
+                    .ok()
+                    .flatten();
+            Some((candidate, url, probe, protocol))
         });
     }
 
@@ -73,7 +79,7 @@ async fn find(client: &Client, candidates: Vec<Candidate>) -> Vec<LocalService> 
 
     let mut ranked = found
         .into_iter()
-        .filter_map(|(candidate, url, probe)| {
+        .filter_map(|(candidate, url, probe, protocol)| {
             let identity = identify(&candidate, &probe)?;
             Some((
                 (
@@ -86,6 +92,7 @@ async fn find(client: &Client, candidates: Vec<Candidate>) -> Vec<LocalService> 
                     kind: identity.kind,
                     detail: identity.detail,
                     status: probe.status,
+                    protocol,
                 },
             ))
         })
@@ -100,6 +107,7 @@ async fn probe(client: &Client, url: &Url) -> Option<Probe> {
     let status = response.status().as_u16();
     let server = header(response.headers(), "server");
     let powered_by = header(response.headers(), "x-powered-by");
+    let content_type = header(response.headers(), "content-type");
 
     let mut body = Vec::new();
     while body.len() < MAX_FINGERPRINT_BYTES {
@@ -114,8 +122,59 @@ async fn probe(client: &Client, url: &Url) -> Option<Probe> {
         status,
         server,
         powered_by,
+        content_type,
         body: String::from_utf8_lossy(&body).into_owned(),
     })
+}
+
+async fn protocol_probe(client: &Client, url: &Url, probe: &Probe) -> Option<&'static str> {
+    if websocket_probe(client, url).await {
+        return Some("WS");
+    }
+    if grpc_probe(client, url).await {
+        return Some("gRPC");
+    }
+    passive_protocol(probe)
+}
+
+async fn websocket_probe(client: &Client, url: &Url) -> bool {
+    let response = client
+        .get(url.clone())
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
+        .await;
+    response.is_ok_and(|response| response.status().as_u16() == 101)
+}
+
+async fn grpc_probe(client: &Client, url: &Url) -> bool {
+    let response = match client
+        .post(url.clone())
+        .header("content-type", "application/grpc")
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return false,
+    };
+    response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().starts_with("application/grpc"))
+}
+
+fn passive_protocol(probe: &Probe) -> Option<&'static str> {
+    let content_type = probe.content_type.as_deref()?.to_ascii_lowercase();
+    if content_type.starts_with("text/event-stream") {
+        Some("SSE")
+    } else if content_type.starts_with("application/grpc") {
+        Some("gRPC")
+    } else {
+        None
+    }
 }
 
 fn header(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -434,7 +493,7 @@ mod tests {
 
     use super::{
         Candidate, Probe, command_port, find, identify, page_title, parse_listeners,
-        project_candidates,
+        passive_protocol, project_candidates,
     };
 
     fn probe(server: Option<&str>, body: &str) -> Probe {
@@ -442,6 +501,7 @@ mod tests {
             status: 200,
             server: server.map(str::to_string),
             powered_by: None,
+            content_type: None,
             body: body.into(),
         }
     }
@@ -467,13 +527,31 @@ mod tests {
         println!("discovered:");
         for service in super::find(&Client::new(), candidates).await {
             println!(
-                "  {:<14} {:<28} {} {}",
+                "  {:<14} {:<28} {} {} {}",
                 service.kind,
                 service.url.as_str(),
                 service.status,
-                service.detail.unwrap_or_default()
+                service.detail.unwrap_or_default(),
+                service.protocol.unwrap_or_default()
             );
         }
+    }
+
+    #[test]
+    fn passive_protocol_marks_streaming_and_grpc_content_types() {
+        let sse = Probe {
+            content_type: Some("text/event-stream; charset=utf-8".into()),
+            ..probe(None, "")
+        };
+        assert_eq!(passive_protocol(&sse), Some("SSE"));
+
+        let grpc = Probe {
+            content_type: Some("application/grpc+proto".into()),
+            ..probe(None, "")
+        };
+        assert_eq!(passive_protocol(&grpc), Some("gRPC"));
+
+        assert_eq!(passive_protocol(&probe(None, "")), None);
     }
 
     #[test]
@@ -579,10 +657,29 @@ mod tests {
             stream
                 .write_all(
                     format!(
-                        "HTTP/1.1 200 OK\r\nX-Powered-By: Express\r\nContent-Length: {}\r\n\r\n{body}",
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\nX-Powered-By: Express\r\nContent-Length: {}\r\n\r\n{body}",
                         body.len()
                     )
                     .as_bytes(),
+                )
+                .await
+                .unwrap();
+
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            let bytes_read = stream.read(&mut request).await.unwrap();
+            assert!(bytes_read > 0);
+            assert!(
+                String::from_utf8_lossy(&request[..bytes_read])
+                    .to_ascii_lowercase()
+                    .contains("upgrade: websocket")
+            );
+            stream
+                .write_all(
+                    b"HTTP/1.1 101 Switching Protocols\r\n\
+                      Connection: Upgrade\r\n\
+                      Upgrade: websocket\r\n\
+                      Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
                 )
                 .await
                 .unwrap();
@@ -606,5 +703,6 @@ mod tests {
         assert_eq!(service.kind, "Express");
         assert_eq!(service.detail.as_deref(), Some("Checkout"));
         assert_eq!(service.status, 200);
+        assert_eq!(service.protocol, Some("WS"));
     }
 }

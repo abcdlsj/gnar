@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use anstyle::{Color as AnsiStyleColor, RgbColor, Style as AnsiStyle};
 use base64::Engine;
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -58,7 +59,7 @@ impl Screen {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
             let _ = disable_raw_mode();
             return Err(error);
         }
@@ -106,6 +107,7 @@ pub fn choose_service(services: &[LocalService]) -> io::Result<Option<usize>> {
         return Ok(None);
     }
     let mut stderr = io::stderr();
+    execute!(stderr, Hide)?;
     let rows = service_rows(services);
     let mut view = View::new(rows.len());
 
@@ -145,6 +147,7 @@ pub fn choose_service(services: &[LocalService]) -> io::Result<Option<usize>> {
         }
     };
     let _ = disable_raw_mode();
+    execute!(stderr, Show)?;
 
     finish_prompt(&mut stderr, &rows, &view, choice)?;
     Ok(choice)
@@ -155,6 +158,7 @@ pub fn choose_edge(edges: &[String]) -> io::Result<Option<usize>> {
         return Ok(None);
     }
     let mut stderr = io::stderr();
+    execute!(stderr, Hide)?;
     let mut view = View::new(edges.len());
 
     write!(stderr, "{}", edge_header(edges.len()))?;
@@ -193,6 +197,7 @@ pub fn choose_edge(edges: &[String]) -> io::Result<Option<usize>> {
         }
     };
     let _ = disable_raw_mode();
+    execute!(stderr, Show)?;
     finish_edge_prompt(&mut stderr, edges, &view, choice)?;
     Ok(choice)
 }
@@ -389,6 +394,7 @@ pub fn choose_login_setup(generated: &str) -> io::Result<LoginSetup> {
     ];
 
     let mut stderr = io::stderr();
+    execute!(stderr, Hide)?;
     write!(stderr, "{}", prompt_top("SET UP EDGE", "publishing access"))?;
     for (index, (title, detail)) in CHOICES.iter().enumerate() {
         writeln!(stderr, "{}", choice_row(index, title, detail, index == 0))?;
@@ -437,6 +443,7 @@ pub fn choose_login_setup(generated: &str) -> io::Result<LoginSetup> {
         }
     };
     let _ = disable_raw_mode();
+    execute!(stderr, Show)?;
 
     let collapse = |writer: &mut io::Stderr| -> io::Result<()> {
         let prompt_height = CHOICES.len() + 1;
@@ -493,6 +500,7 @@ fn choice_row(index: usize, title: &str, detail: &str, selected: bool) -> String
 }
 
 fn read_secret(writer: &mut io::Stderr, generated: &str) -> io::Result<Option<String>> {
+    execute!(writer, Hide)?;
     write!(
         writer,
         "  {PROMPT_BOLD}Approval secret{PROMPT_BOLD:#}  {PROMPT_MUTED}(ENTER to generate one){PROMPT_MUTED:#}\n  › "
@@ -524,6 +532,7 @@ fn read_secret(writer: &mut io::Stderr, generated: &str) -> io::Result<Option<St
         }
     };
     let _ = disable_raw_mode();
+    execute!(writer, Show)?;
     writeln!(writer)?;
 
     if !confirmed {

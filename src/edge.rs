@@ -609,6 +609,24 @@ async fn forward_public(State(state): State<EdgeState>, request: Request) -> Res
     let Some(session) = state.sessions.read().await.get(&name).cloned() else {
         return public_miss(&state, &request);
     };
+    // A slashless tunnel root is ambiguous for relative URLs: browsers treat
+    // `/t/<name>` as a file and resolve `./asset.js` against `/t/`. Redirect
+    // GET/HEAD to the canonical trailing-slash form so SPA assets load.
+    if forwarded_path == "/"
+        && request.uri().path() == format!("/t/{name}")
+        && matches!(request.method(), &Method::GET | &Method::HEAD)
+    {
+        let location = match request.uri().query() {
+            Some(query) => format!("/t/{name}/?{query}"),
+            None => format!("/t/{name}/"),
+        };
+        return (
+            StatusCode::MOVED_PERMANENTLY,
+            [(header::LOCATION, location)],
+            "",
+        )
+            .into_response();
+    }
     if is_websocket_upgrade(&request) {
         if !session.settings.websocket {
             return tunnel_page(

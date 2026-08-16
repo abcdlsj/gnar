@@ -75,6 +75,20 @@ async fn request_crosses_edge_and_is_recorded() {
     let response = wait_for_body(&public_url).await;
     assert_eq!(response, "GET /base/hello?x=1 ");
 
+    let slashless = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{edge_url}/t/integration"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(slashless.status(), 301);
+    assert_eq!(
+        slashless.headers().get("location").unwrap().to_str().unwrap(),
+        format!("/t/integration/")
+    );
+
     let response = reqwest::Client::new()
         .post(format!("{edge_url}/t/integration/webhook"))
         .body("payload")

@@ -1364,7 +1364,10 @@ fn public_url(state: &EdgeState, name: &str) -> String {
         };
         return format!("{scheme}://{name}.{domain}");
     }
-    format!("{}/t/{name}", state.public_url)
+    // A trailing slash keeps relative URLs inside the tunnel's own directory
+    // (the browser otherwise treats `/t/<name>` as a file and resolves
+    // `./asset.js` against `/t/`).
+    format!("{}/t/{name}/", state.public_url)
 }
 
 fn random_name() -> String {

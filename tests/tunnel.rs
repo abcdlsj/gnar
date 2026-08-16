@@ -85,7 +85,12 @@ async fn request_crosses_edge_and_is_recorded() {
         .unwrap();
     assert_eq!(slashless.status(), 301);
     assert_eq!(
-        slashless.headers().get("location").unwrap().to_str().unwrap(),
+        slashless
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         format!("/t/integration/")
     );
 

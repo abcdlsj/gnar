@@ -182,6 +182,18 @@ async fn enrollment_returns_stable_authorization_and_validation_errors() {
         malformed.json::<serde_json::Value>().await.unwrap()["code"],
         "malformed_account"
     );
+    let malformed_json = client
+        .post(format!("{}/v1/device/enroll", edge.url))
+        .header("content-type", "application/json")
+        .body("{")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(malformed_json.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        malformed_json.json::<serde_json::Value>().await.unwrap()["code"],
+        "malformed_request"
+    );
     edge.cleanup();
 }
 
@@ -236,7 +248,9 @@ async fn enrollment_cli_emits_json_without_the_key_or_token() {
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains(APPROVAL_SECRET));
+    assert!(!stderr.contains(APPROVAL_SECRET));
     let token = serde_json::from_str::<serde_json::Value>(
         &std::fs::read_to_string(edge.config_dir.join("credentials.json")).unwrap(),
     )
@@ -245,6 +259,18 @@ async fn enrollment_cli_emits_json_without_the_key_or_token() {
         .unwrap()
         .to_string();
     assert!(!stdout.contains(&token));
+    assert!(!stderr.contains(&token));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::metadata(edge.config_dir.join("credentials.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
     let events: Vec<serde_json::Value> = stdout
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -283,7 +309,9 @@ async fn enrollment_cli_errors_are_json_and_do_not_echo_the_key() {
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains(secret));
+    assert!(!stderr.contains(secret));
     let events: Vec<serde_json::Value> = stdout
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -432,6 +460,35 @@ async fn anonymous_tunnel_limit_is_enforced() {
         second.contains("already has 1 anonymous tunnels"),
         "{second}"
     );
+    edge.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_account_tunnels_cannot_race_past_the_limit() {
+    let edge = start_edge(&["--account-tunnels", "1"]).await;
+    let upstream = start_upstream().await;
+    let client = reqwest::Client::new();
+    let token = mint_account(&client, &edge, "alice").await;
+    let mut tunnels = Vec::new();
+    for index in 0..8 {
+        tunnels.push(spawn_client(
+            &edge,
+            &upstream,
+            &["--name", &format!("concurrent-{index}")],
+            Some(&token),
+        ));
+    }
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let connection = rusqlite::Connection::open(&edge.database).unwrap();
+    let live: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM tunnel_sessions WHERE disconnected_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(live, 1);
+    drop(tunnels);
     edge.cleanup();
 }
 

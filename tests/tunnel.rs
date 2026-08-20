@@ -1,6 +1,8 @@
 use std::net::TcpListener as StdTcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use axum::Router;
@@ -11,6 +13,7 @@ use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -39,7 +42,8 @@ async fn request_crosses_edge_and_is_recorded() {
     let upstream_task = tokio::spawn(axum::serve(upstream, upstream_app).into_future());
 
     let edge_port = free_port();
-    let edge_url = format!("http://127.0.0.1:{edge_port}");
+    let edge_origin = format!("http://127.0.0.1:{edge_port}");
+    let edge_url = format!("{edge_origin}/self-hosted");
     let database = temp_database();
     let binary = env!("CARGO_BIN_EXE_gnar");
     let edge = Command::new(binary)
@@ -91,7 +95,7 @@ async fn request_crosses_edge_and_is_recorded() {
             .unwrap()
             .to_str()
             .unwrap(),
-        format!("/t/integration/")
+        format!("/self-hosted/t/integration/")
     );
 
     let response = reqwest::Client::new()
@@ -152,20 +156,17 @@ async fn websocket_frames_cross_the_edge_in_both_directions() {
     let _guard = TEST_LOCK.lock().await;
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_address = upstream.local_addr().unwrap();
-    let upstream_app = Router::new().route(
-        "/ws",
-        get(|ws: WebSocketUpgrade| async move {
-            ws.on_upgrade(|mut socket| async move {
-                while let Some(Ok(message)) = socket.recv().await {
-                    if matches!(message, AxumMessage::Text(_) | AxumMessage::Binary(_))
-                        && socket.send(message).await.is_err()
-                    {
-                        break;
-                    }
+    let upstream_app = Router::new().fallback(|ws: WebSocketUpgrade| async move {
+        ws.on_upgrade(|mut socket| async move {
+            while let Some(Ok(message)) = socket.recv().await {
+                if matches!(message, AxumMessage::Text(_) | AxumMessage::Binary(_))
+                    && socket.send(message).await.is_err()
+                {
+                    break;
                 }
-            })
-        }),
-    );
+            }
+        })
+    });
     let upstream_task = tokio::spawn(axum::serve(upstream, upstream_app).into_future());
 
     let edge_port = free_port();
@@ -198,6 +199,17 @@ async fn websocket_frames_cross_the_edge_in_both_directions() {
         .unwrap();
     let mut tunnel = ChildGuard(tunnel);
 
+    let mut root_socket = wait_for_ws(&format!("ws://127.0.0.1:{edge_port}/t/integration")).await;
+    root_socket
+        .send(Message::text("root websocket"))
+        .await
+        .unwrap();
+    assert_eq!(
+        root_socket.next().await.unwrap().unwrap(),
+        Message::text("root websocket")
+    );
+    root_socket.close(None).await.unwrap();
+
     let public_url = format!("ws://127.0.0.1:{edge_port}/t/integration/ws");
     let mut socket = wait_for_ws(&public_url).await;
     socket
@@ -213,15 +225,176 @@ async fn websocket_frames_cross_the_edge_in_both_directions() {
         .send(Message::binary(vec![0; 4 * 1024 * 1024 + 1]))
         .await;
     if oversized_send.is_ok() {
-        let oversized = tokio::time::timeout(Duration::from_secs(5), socket.next())
-            .await
-            .unwrap();
-        assert!(
-            matches!(oversized, None | Some(Err(_)) | Some(Ok(Message::Close(_)))),
-            "oversized WebSocket frames must be rejected, got {oversized:?}"
-        );
+        let close_code = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match socket.next().await {
+                    Some(Ok(Message::Close(Some(frame)))) => break Some(frame.code.into()),
+                    Some(Ok(Message::Close(None))) | None | Some(Err(_)) => break None,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(close_code, Some(1009));
     }
     let _ = socket.close(None).await;
+
+    tunnel.0.kill().unwrap();
+    edge.0.kill().unwrap();
+    upstream_task.abort();
+    let _ = std::fs::remove_file(database);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_uses_the_protocol_selected_by_the_local_service() {
+    let _guard = TEST_LOCK.lock().await;
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_address = upstream.local_addr().unwrap();
+    let upstream_app = Router::new().route(
+        "/ws",
+        get(|ws: WebSocketUpgrade| async move {
+            ws.protocols(["second"])
+                .on_upgrade(|mut socket| async move {
+                    while let Some(Ok(message)) = socket.recv().await {
+                        if socket.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                })
+        }),
+    );
+    let upstream_task = tokio::spawn(axum::serve(upstream, upstream_app).into_future());
+
+    let edge_port = free_port();
+    let edge_url = format!("http://127.0.0.1:{edge_port}");
+    let database = temp_database();
+    let binary = env!("CARGO_BIN_EXE_gnar");
+    let edge = Command::new(binary)
+        .args([
+            "serve",
+            "--listen",
+            &format!("127.0.0.1:{edge_port}"),
+            "--public-url",
+            &edge_url,
+            "--database",
+            database.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut edge = ChildGuard(edge);
+    wait_for_status(&format!("{edge_url}/healthz"), 200).await;
+
+    let target = format!("http://{upstream_address}");
+    let tunnel = Command::new(binary)
+        .args([&target, "--edge", &edge_url, "--name", "protocol"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut tunnel = ChildGuard(tunnel);
+
+    let mut request = format!("ws://127.0.0.1:{edge_port}/t/protocol/ws")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", "first, second".parse().unwrap());
+    let mut connected = None;
+    for _ in 0..100 {
+        if let Ok(connection) = tokio_tungstenite::connect_async(request.clone()).await {
+            connected = Some(connection);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let (mut socket, response) = connected.expect("subprotocol WebSocket did not connect");
+    assert_eq!(
+        response.headers().get("sec-websocket-protocol").unwrap(),
+        "second"
+    );
+    socket.send(Message::text("selected")).await.unwrap();
+    assert_eq!(
+        socket.next().await.unwrap().unwrap(),
+        Message::text("selected")
+    );
+    socket.close(None).await.unwrap();
+
+    tunnel.0.kill().unwrap();
+    edge.0.kill().unwrap();
+    upstream_task.abort();
+    let _ = std::fs::remove_file(database);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abruptly_disconnected_public_websockets_release_the_local_connection() {
+    let _guard = TEST_LOCK.lock().await;
+    let active = Arc::new(AtomicUsize::new(0));
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_address = upstream.local_addr().unwrap();
+    let upstream_active = active.clone();
+    let upstream_app = Router::new().route(
+        "/ws",
+        get(move |ws: WebSocketUpgrade| {
+            let active = upstream_active.clone();
+            async move {
+                ws.on_upgrade(move |mut socket| async move {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    while socket.recv().await.is_some() {}
+                    active.fetch_sub(1, Ordering::SeqCst);
+                })
+            }
+        }),
+    );
+    let upstream_task = tokio::spawn(axum::serve(upstream, upstream_app).into_future());
+
+    let edge_port = free_port();
+    let edge_url = format!("http://127.0.0.1:{edge_port}");
+    let database = temp_database();
+    let binary = env!("CARGO_BIN_EXE_gnar");
+    let edge = Command::new(binary)
+        .args([
+            "serve",
+            "--listen",
+            &format!("127.0.0.1:{edge_port}"),
+            "--public-url",
+            &edge_url,
+            "--database",
+            database.to_str().unwrap(),
+            "--websocket-concurrent",
+            "1",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut edge = ChildGuard(edge);
+    wait_for_status(&format!("{edge_url}/healthz"), 200).await;
+
+    let target = format!("http://{upstream_address}");
+    let tunnel = Command::new(binary)
+        .args([&target, "--edge", &edge_url, "--name", "disconnect"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut tunnel = ChildGuard(tunnel);
+    let public_url = format!("ws://127.0.0.1:{edge_port}/t/disconnect/ws");
+
+    for _ in 0..8 {
+        let socket = wait_for_ws(&public_url).await;
+        assert_eq!(active.load(Ordering::SeqCst), 1);
+        drop(socket);
+        for _ in 0..100 {
+            if active.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
 
     tunnel.0.kill().unwrap();
     edge.0.kill().unwrap();
@@ -468,7 +641,7 @@ async fn websocket_concurrency_limit_rejects_the_next_exchange() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn websocket_idle_timeout_closes_a_silent_client() {
+async fn websocket_idle_timeout_requires_a_public_heartbeat_reply() {
     let _guard = TEST_LOCK.lock().await;
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_address = upstream.local_addr().unwrap();
@@ -476,9 +649,12 @@ async fn websocket_idle_timeout_closes_a_silent_client() {
         "/ws",
         get(|ws: WebSocketUpgrade| async move {
             ws.on_upgrade(|mut socket| async move {
-                while let Some(Ok(message)) = socket.recv().await {
-                    if matches!(message, AxumMessage::Text(_) | AxumMessage::Binary(_))
-                        && socket.send(message).await.is_err()
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if socket
+                        .send(AxumMessage::Text("local traffic".into()))
+                        .await
+                        .is_err()
                     {
                         break;
                     }

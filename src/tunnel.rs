@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -8,7 +9,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, StreamExt};
 use reqwest::{Client, Method};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -43,6 +44,42 @@ type SocketReader = SplitStream<Socket>;
 type Connection = (SocketWriter, SocketReader, TunnelOpened);
 type BodySender = mpsc::Sender<Result<Bytes, io::Error>>;
 type WsSender = mpsc::Sender<WsMessage>;
+
+struct ConnectionTask {
+    task: JoinHandle<Result<(), String>>,
+}
+
+impl ConnectionTask {
+    fn new(
+        writer: SocketWriter,
+        reader: SocketReader,
+        outgoing: Arc<Mutex<mpsc::Receiver<ClientFrame>>>,
+        sent: mpsc::Sender<ClientFrame>,
+        incoming: mpsc::Sender<EdgeFrame>,
+    ) -> Self {
+        Self {
+            task: tokio::spawn(pump_connection(writer, reader, outgoing, sent, incoming)),
+        }
+    }
+
+    fn replace(
+        &mut self,
+        writer: SocketWriter,
+        reader: SocketReader,
+        outgoing: Arc<Mutex<mpsc::Receiver<ClientFrame>>>,
+        sent: mpsc::Sender<ClientFrame>,
+        incoming: mpsc::Sender<EdgeFrame>,
+    ) {
+        self.task.abort();
+        self.task = tokio::spawn(pump_connection(writer, reader, outgoing, sent, incoming));
+    }
+}
+
+impl Drop for ConnectionTask {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
 
 /// Routing state for one tunnel. Each exchange id maps to at most one HTTP
 /// body stream or one WebSocket relay, so the two routing tables never collide.
@@ -88,7 +125,7 @@ pub async fn run(
     let websocket_url = websocket_url(&edge)?;
     let name = name.map(normalize_name).transpose()?;
     let token = crate::account::token_for(&edge);
-    let (mut writer, mut reader, opened) =
+    let (writer, reader, opened) =
         connect_tunnel(&websocket_url, name, settings, token.as_deref()).await?;
     let mut settings = opened.settings.clone();
     let tunnel_name = opened.name.clone();
@@ -114,7 +151,7 @@ pub async fn run(
         ui.draw().map_err(|error| ui_error("draw", error))?;
     }
 
-    let (responses, mut outgoing) = mpsc::channel(FRAME_QUEUE);
+    let (responses, outgoing) = mpsc::channel(FRAME_QUEUE);
     let (local_responses, mut local_outgoing) = mpsc::channel(FRAME_QUEUE);
     let mut state = ForwardState {
         target,
@@ -125,6 +162,16 @@ pub async fn run(
         ws_tasks: HashMap::new(),
         settings: settings.clone(),
     };
+    let outgoing = Arc::new(Mutex::new(outgoing));
+    let (sent_frames, mut sent) = mpsc::channel(FRAME_QUEUE);
+    let (edge_frames, mut incoming) = mpsc::channel(FRAME_QUEUE);
+    let mut connection = ConnectionTask::new(
+        writer,
+        reader,
+        outgoing.clone(),
+        sent_frames.clone(),
+        edge_frames.clone(),
+    );
     let mut redraw = tokio::time::interval(REDRAW_INTERVAL);
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
@@ -146,6 +193,7 @@ pub async fn run(
                         state.settings = settings.clone();
                         state.requests.clear();
                         state.abort_websockets();
+                        connection.task.abort();
                         let Some((restored_writer, restored_reader, opened)) = reconnect(
                             &websocket_url,
                             &tunnel_name,
@@ -159,7 +207,13 @@ pub async fn run(
                         };
                         settings = opened.settings.clone();
                         state.settings = settings.clone();
-                        (writer, reader) = (restored_writer, restored_reader);
+                        connection.replace(
+                            restored_writer,
+                            restored_reader,
+                            outgoing.clone(),
+                            sent_frames.clone(),
+                            edge_frames.clone(),
+                        );
                         ui.set_online(true);
                         ui.set_settings(&settings);
                         ui.notify("settings applied; tunnel reconnected");
@@ -169,35 +223,26 @@ pub async fn run(
                 }
                 ui.draw().map_err(|error| ui_error("draw", error))?;
             }
-            frame = outgoing.recv() => {
+            frame = sent.recv() => {
                 let Some(frame) = frame else { return Ok(()) };
                 state.observe_client_frame(&frame);
                 if let Some(ui) = &mut ui {
                     ui.apply_client(&frame);
                 }
-                let bytes = protocol::encode(&frame).map_err(|error| AppError::Edge(error.to_string()))?;
-                send_ws_message(&mut writer, Message::Binary(bytes.into()))
-                    .await
-                    .map_err(AppError::Edge)?;
             }
             Some(frame) = local_outgoing.recv() => {
                 if let Some(ui) = &mut ui {
                     ui.apply_client(&frame);
                 }
             }
-            message = reader.next() => {
-                if let Some(Ok(Message::Binary(bytes))) = message {
-                    let frame = protocol::decode::<EdgeFrame>(&bytes).map_err(|error| AppError::Edge(error.to_string()))?;
-                    if let Some(ui) = &mut ui {
-                        ui.apply_edge(&frame);
-                    }
-                    handle_edge_frame(&mut state, frame).await;
-                    continue;
+            frame = incoming.recv() => {
+                let Some(frame) = frame else { return Ok(()) };
+                if let Some(ui) = &mut ui {
+                    ui.apply_edge(&frame);
                 }
-                if matches!(message, Some(Ok(_))) {
-                    continue;
-                }
-
+                handle_edge_frame(&mut state, frame).await;
+            }
+            _ = &mut connection.task => {
                 state.requests.clear();
                 state.abort_websockets();
                 output.event(Event::EdgeReconnecting)?;
@@ -218,7 +263,13 @@ pub async fn run(
                 };
                 settings = opened.settings.clone();
                 state.settings = settings.clone();
-                (writer, reader) = (restored_writer, restored_reader);
+                connection.replace(
+                    restored_writer,
+                    restored_reader,
+                    outgoing.clone(),
+                    sent_frames.clone(),
+                    edge_frames.clone(),
+                );
                 output.event(Event::EdgeRestored)?;
                 if let Some(ui) = &mut ui {
                     ui.set_online(true);
@@ -226,6 +277,52 @@ pub async fn run(
                 }
             }
         }
+    }
+}
+
+async fn pump_connection(
+    mut writer: SocketWriter,
+    mut reader: SocketReader,
+    outgoing: Arc<Mutex<mpsc::Receiver<ClientFrame>>>,
+    sent: mpsc::Sender<ClientFrame>,
+    incoming: mpsc::Sender<EdgeFrame>,
+) -> Result<(), String> {
+    let write = async {
+        loop {
+            let frame = {
+                let mut outgoing = outgoing.lock().await;
+                outgoing.recv().await
+            }
+            .ok_or_else(|| "tunnel response queue closed".to_string())?;
+            let bytes = protocol::encode(&frame).map_err(|error| error.to_string())?;
+            send_ws_message(&mut writer, Message::Binary(bytes.into())).await?;
+            sent.send(frame)
+                .await
+                .map_err(|_| "tunnel observer closed".to_string())?;
+        }
+    };
+    let read = async {
+        loop {
+            match reader.next().await {
+                Some(Ok(Message::Binary(bytes))) => {
+                    let frame =
+                        protocol::decode::<EdgeFrame>(&bytes).map_err(|error| error.to_string())?;
+                    incoming
+                        .send(frame)
+                        .await
+                        .map_err(|_| "tunnel request queue closed".to_string())?;
+                }
+                Some(Ok(_)) => {}
+                Some(Err(error)) => return Err(error.to_string()),
+                None => return Err("edge closed the tunnel".into()),
+            }
+        }
+    };
+    tokio::pin!(write);
+    tokio::pin!(read);
+    tokio::select! {
+        result = &mut write => result,
+        result = &mut read => result,
     }
 }
 
@@ -521,7 +618,19 @@ async fn ws_forward_inner(
                 }
             }
             message = reader.next() => {
-                let Some(Ok(message)) = message else { break };
+                let message = match message {
+                    Some(Ok(message)) => message,
+                    Some(Err(error)) if websocket_capacity_error(&error.to_string()) => {
+                        return Err(format!(
+                            "local WebSocket message exceeds the {} MiB limit",
+                            protocol::WS_MAX_FRAME_BYTES / (1024 * 1024)
+                        ));
+                    }
+                    Some(Err(error)) => {
+                        return Err(format!("local WebSocket read failed: {error}"));
+                    }
+                    None => break,
+                };
                 let relayed = ws_message(&message);
                 if relayed.len() > protocol::WS_MAX_FRAME_BYTES {
                     return Err(format!(
@@ -546,6 +655,13 @@ async fn ws_forward_inner(
         }
     }
     Ok(())
+}
+
+fn websocket_capacity_error(reason: &str) -> bool {
+    let reason = reason.to_ascii_lowercase();
+    reason.contains("space limit")
+        || reason.contains("message too long")
+        || reason.contains("capacity")
 }
 
 fn header_value(value: &[u8]) -> Result<tokio_tungstenite::tungstenite::http::HeaderValue, String> {

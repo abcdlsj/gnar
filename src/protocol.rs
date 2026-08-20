@@ -166,7 +166,7 @@ pub enum EdgeFrame {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientFrame {
     Start {
         id: u64,

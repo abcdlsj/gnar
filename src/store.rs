@@ -72,6 +72,7 @@ enum Command {
     },
     DenyDeviceCode(String, Reply<bool>),
     PollDeviceCode(String, Reply<DeviceState>),
+    #[cfg(test)]
     CountLiveTunnels(i64, Reply<usize>),
     TakeRequestBudget {
         endpoint_id: i64,
@@ -191,7 +192,8 @@ impl Store {
             .await
     }
 
-    pub async fn count_live_tunnels(&self, account_id: i64) -> Result<usize, String> {
+    #[cfg(test)]
+    async fn count_live_tunnels(&self, account_id: i64) -> Result<usize, String> {
         self.request(|reply| Command::CountLiveTunnels(account_id, reply))
             .await
     }
@@ -309,6 +311,7 @@ fn apply(connection: &Connection, command: Command, issued: &mut HashMap<String,
             });
             send(reply, state);
         }
+        #[cfg(test)]
         Command::CountLiveTunnels(account_id, reply) => {
             send(reply, count_live_tunnels(connection, account_id));
         }
@@ -380,6 +383,7 @@ fn deny_device_code(connection: &Connection, user_code: &str) -> rusqlite::Resul
         .map(|rows| rows > 0)
 }
 
+#[cfg(test)]
 fn count_live_tunnels(connection: &Connection, account_id: i64) -> rusqlite::Result<usize> {
     connection.query_row(
         "SELECT count(*) FROM tunnel_sessions s

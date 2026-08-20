@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::{self, Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -272,9 +272,10 @@ fn read_enrollment_key() -> Result<String, AppError> {
     read_enrollment_key_from(&mut stdin)
 }
 
-fn read_enrollment_key_from(reader: &mut impl Read) -> Result<String, AppError> {
+fn read_enrollment_key_from(reader: &mut impl BufRead) -> Result<String, AppError> {
     let mut input = String::new();
-    reader.read_to_string(&mut input).map_err(|error| {
+    let mut bounded = std::io::Read::take(reader, (MAX_ENROLLMENT_KEY_BYTES + 1) as u64);
+    bounded.read_line(&mut input).map_err(|error| {
         AppError::Edge(format!(
             "could not read the enrollment key from stdin: {error}"
         ))
@@ -286,9 +287,9 @@ fn read_enrollment_key_from(reader: &mut impl Read) -> Result<String, AppError> 
     }
     let key = input.strip_suffix('\n').unwrap_or(&input);
     let key = key.strip_suffix('\r').unwrap_or(key);
-    if key.is_empty() || key.contains(['\r', '\n']) {
+    if key.is_empty() {
         return Err(AppError::Edge(
-            "enrollment key stdin must contain exactly one non-empty line".into(),
+            "enrollment key stdin must contain one non-empty line".into(),
         ));
     }
     Ok(key.to_string())
@@ -387,26 +388,47 @@ fn write(credentials: &Credentials) -> Result<(), AppError> {
     }
     let content = serde_json::to_string_pretty(credentials)
         .map_err(|error| AppError::Edge(error.to_string()))?;
-    fs::write(&path, content)
-        .map_err(|error| AppError::Edge(format!("could not write {}: {error}", path.display())))?;
-    restrict(&path)
+    let temporary = path.with_extension(format!(
+        "json.tmp-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let result = write_private(&temporary, content.as_bytes()).and_then(|_| {
+        fs::rename(&temporary, &path).map_err(|error| {
+            AppError::Edge(format!("could not replace {}: {error}", path.display()))
+        })
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(unix)]
-fn restrict(path: &std::path::Path) -> Result<(), AppError> {
-    use std::os::unix::fs::PermissionsExt;
+fn write_private(path: &std::path::Path, content: &[u8]) -> Result<(), AppError> {
+    use std::os::unix::fs::OpenOptionsExt;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
-        AppError::Edge(format!(
-            "could not restrict {} to this user: {error}",
-            path.display()
-        ))
-    })
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| AppError::Edge(format!("could not create {}: {error}", path.display())))?;
+    file.write_all(content)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| AppError::Edge(format!("could not write {}: {error}", path.display())))
 }
 
 #[cfg(not(unix))]
-fn restrict(_path: &std::path::Path) -> Result<(), AppError> {
-    Ok(())
+fn write_private(path: &std::path::Path, content: &[u8]) -> Result<(), AppError> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| AppError::Edge(format!("could not create {}: {error}", path.display())))?;
+    file.write_all(content)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| AppError::Edge(format!("could not write {}: {error}", path.display())))
 }
 
 fn unreachable_edge(edge: &str, error: &reqwest::Error) -> AppError {
@@ -450,26 +472,9 @@ struct AccountResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self, Read};
+    use std::io::{BufRead, Cursor};
 
     use super::{Credentials, key, read_enrollment_key_from};
-
-    struct OneRead {
-        input: String,
-        reads: usize,
-    }
-
-    impl Read for OneRead {
-        fn read_to_string(&mut self, output: &mut String) -> io::Result<usize> {
-            self.reads += 1;
-            output.push_str(&self.input);
-            Ok(self.input.len())
-        }
-
-        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-            panic!("enrollment must read stdin with read_to_string");
-        }
-    }
 
     #[test]
     fn edge_key_ignores_a_trailing_slash() {
@@ -509,26 +514,21 @@ mod tests {
 
     #[test]
     fn enrollment_key_is_read_once_and_accepts_one_trailing_newline() {
-        let mut reader = OneRead {
-            input: "let-me-in\n".into(),
-            reads: 0,
-        };
+        let mut reader = Cursor::new("let-me-in\nunused\n");
         assert_eq!(read_enrollment_key_from(&mut reader).unwrap(), "let-me-in");
-        assert_eq!(reader.reads, 1);
+        let mut remaining = String::new();
+        reader.read_line(&mut remaining).unwrap();
+        assert_eq!(remaining, "unused\n");
     }
 
     #[test]
-    fn enrollment_key_rejects_multiple_lines_without_echoing_them() {
-        let mut reader = OneRead {
-            input: "let-me-in\nsecond-line".into(),
-            reads: 0,
-        };
+    fn enrollment_key_rejects_oversized_input_without_echoing_it() {
+        let secret = "x".repeat(super::MAX_ENROLLMENT_KEY_BYTES + 1);
+        let mut reader = Cursor::new(secret.clone());
         let error = read_enrollment_key_from(&mut reader)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("exactly one"));
-        assert!(!error.contains("let-me-in"));
-        assert!(!error.contains("second-line"));
-        assert_eq!(reader.reads, 1);
+        assert!(error.contains("too long"));
+        assert!(!error.contains(&secret));
     }
 }

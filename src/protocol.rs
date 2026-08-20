@@ -3,6 +3,19 @@ use serde::{Deserialize, Serialize};
 pub const VERSION: u16 = 2;
 pub const MAX_NAME_LENGTH: usize = 48;
 
+pub const WS_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+pub const WS_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+pub const WS_CONTROL_MAX_FRAME_BYTES: usize = WS_MAX_FRAME_BYTES + 64 * 1024;
+pub const WS_CONTROL_MAX_MESSAGE_BYTES: usize = WS_MAX_MESSAGE_BYTES + 64 * 1024;
+pub const WS_READ_BUFFER_BYTES: usize = 64 * 1024;
+pub const WS_WRITE_BUFFER_BYTES: usize = 64 * 1024;
+pub const WS_MAX_WRITE_BUFFER_BYTES: usize = 256 * 1024;
+pub const WS_HEARTBEAT_INTERVAL_SECS: u64 = 30;
+pub const WS_IDLE_TIMEOUT_SECS: u64 = 300;
+pub const WS_CONCURRENT: usize = 32;
+pub const WS_BYTES_PER_MINUTE_MIB: u64 = 1024;
+pub const WS_FRAMES_PER_MINUTE: u64 = 100_000;
+
 pub fn valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     !bytes.is_empty()

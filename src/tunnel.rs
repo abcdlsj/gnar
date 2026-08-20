@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use reqwest::{Client, Method};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -15,6 +15,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
@@ -26,12 +27,15 @@ use crate::protocol::{
 };
 use crate::ui::{Action, LiveUi, Replay};
 
-const FRAME_QUEUE: usize = 128;
+const FRAME_QUEUE: usize = 16;
 const BODY_QUEUE: usize = 16;
+const WS_FRAME_QUEUE: usize = 2;
 const MAX_CHUNK_BYTES: usize = 64 * 1024;
 const REDRAW_INTERVAL: Duration = Duration::from_millis(50);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(10);
+const WS_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type SocketWriter = SplitSink<Socket, Message>;
@@ -172,7 +176,9 @@ pub async fn run(
                     ui.apply_client(&frame);
                 }
                 let bytes = protocol::encode(&frame).map_err(|error| AppError::Edge(error.to_string()))?;
-                writer.send(Message::Binary(bytes.into())).await.map_err(|error| AppError::Edge(error.to_string()))?;
+                send_ws_message(&mut writer, Message::Binary(bytes.into()))
+                    .await
+                    .map_err(AppError::Edge)?;
             }
             Some(frame) = local_outgoing.recv() => {
                 if let Some(ui) = &mut ui {
@@ -286,7 +292,7 @@ async fn handle_edge_frame(state: &mut ForwardState, frame: EdgeFrame) {
                     .await;
                 return;
             }
-            let (incoming, receiver) = mpsc::channel(FRAME_QUEUE);
+            let (incoming, receiver) = mpsc::channel(WS_FRAME_QUEUE);
             state.websockets.insert(id, incoming);
             let task = tokio::spawn(ws_forward(
                 id,
@@ -303,11 +309,19 @@ async fn handle_edge_frame(state: &mut ForwardState, frame: EdgeFrame) {
             let Some(sender) = state.websockets.get(&id).cloned() else {
                 return;
             };
-            if sender.send(message).await.is_err() {
+            if sender.try_send(message).is_err() {
                 if let Some(task) = state.ws_tasks.remove(&id) {
                     task.abort();
                 }
                 state.websockets.remove(&id);
+                let _ = tokio::time::timeout(
+                    FRAME_SEND_TIMEOUT,
+                    state.responses.send(ClientFrame::Error {
+                        id,
+                        reason: "local WebSocket is not keeping up; connection closed".into(),
+                    }),
+                )
+                .await;
             }
         }
     }
@@ -406,6 +420,18 @@ async fn ws_forward(
     let _ = responses.send(frame).await;
 }
 
+async fn send_ws_message<S>(writer: &mut S, message: Message) -> Result<(), String>
+where
+    S: Sink<Message> + Unpin,
+    S::Error: std::fmt::Display,
+{
+    match tokio::time::timeout(WS_WRITE_TIMEOUT, writer.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("WebSocket write failed: {error}")),
+        Err(_) => Err("WebSocket write timed out".into()),
+    }
+}
+
 async fn ws_forward_inner(
     id: u64,
     target: Result<Url, String>,
@@ -451,9 +477,10 @@ async fn ws_forward_inner(
             .insert("sec-websocket-protocol", header_value(selected.as_bytes())?);
     }
 
-    let (socket, response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|error| format!("local WebSocket handshake failed: {error}"))?;
+    let (socket, response) =
+        tokio_tungstenite::connect_async_with_config(request, Some(websocket_config()), false)
+            .await
+            .map_err(|error| format!("local WebSocket handshake failed: {error}"))?;
     let status = response.status().as_u16();
     if status != 101 {
         return Err(format!(
@@ -479,9 +506,15 @@ async fn ws_forward_inner(
         tokio::select! {
             message = incoming.recv() => {
                 let Some(message) = message else { break };
+                if message.len() > protocol::WS_MAX_FRAME_BYTES {
+                    return Err(format!(
+                        "edge WebSocket message exceeds the {} MiB limit",
+                        protocol::WS_MAX_FRAME_BYTES / (1024 * 1024)
+                    ));
+                }
                 let relayed = tungstenite_message(&message);
-                if writer.send(relayed).await.is_err() {
-                    break;
+                if let Err(error) = send_ws_message(&mut writer, relayed).await {
+                    return Err(format!("local WebSocket write failed: {error}"));
                 }
                 if message.is_close() {
                     break;
@@ -490,6 +523,12 @@ async fn ws_forward_inner(
             message = reader.next() => {
                 let Some(Ok(message)) = message else { break };
                 let relayed = ws_message(&message);
+                if relayed.len() > protocol::WS_MAX_FRAME_BYTES {
+                    return Err(format!(
+                        "local WebSocket message exceeds the {} MiB limit",
+                        protocol::WS_MAX_FRAME_BYTES / (1024 * 1024)
+                    ));
+                }
                 if responses
                     .send(ClientFrame::WsFrame {
                         id,
@@ -578,9 +617,13 @@ async fn connect_tunnel(
     token: Option<&str>,
 ) -> Result<Connection, AppError> {
     let edge_error = |error: &dyn std::fmt::Display| AppError::Edge(error.to_string());
-    let (socket, _) = tokio_tungstenite::connect_async(websocket_url.as_str())
-        .await
-        .map_err(|error| unreachable_edge(websocket_url, &error))?;
+    let (socket, _) = tokio_tungstenite::connect_async_with_config(
+        websocket_url.as_str(),
+        Some(tunnel_websocket_config()),
+        false,
+    )
+    .await
+    .map_err(|error| unreachable_edge(websocket_url, &error))?;
     let (mut writer, mut reader) = socket.split();
     let open = protocol::encode(&OpenTunnel {
         version: protocol::VERSION,
@@ -589,8 +632,7 @@ async fn connect_tunnel(
         settings,
     })
     .map_err(|error| edge_error(&error))?;
-    writer
-        .send(Message::Binary(open.into()))
+    send_ws_message(&mut writer, Message::Binary(open.into()))
         .await
         .map_err(|error| edge_error(&error))?;
     let Some(Ok(Message::Binary(reply))) = reader.next().await else {
@@ -644,6 +686,29 @@ async fn reconnect(
         }
         delay = (delay * 2).min(MAX_RECONNECT_DELAY);
     }
+}
+
+fn websocket_config() -> WebSocketConfig {
+    websocket_config_with_limits(protocol::WS_MAX_FRAME_BYTES, protocol::WS_MAX_MESSAGE_BYTES)
+}
+
+fn tunnel_websocket_config() -> WebSocketConfig {
+    websocket_config_with_limits(
+        protocol::WS_CONTROL_MAX_FRAME_BYTES,
+        protocol::WS_CONTROL_MAX_MESSAGE_BYTES,
+    )
+}
+
+fn websocket_config_with_limits(
+    max_frame_bytes: usize,
+    max_message_bytes: usize,
+) -> WebSocketConfig {
+    WebSocketConfig::default()
+        .read_buffer_size(protocol::WS_READ_BUFFER_BYTES)
+        .write_buffer_size(protocol::WS_WRITE_BUFFER_BYTES)
+        .max_write_buffer_size(protocol::WS_MAX_WRITE_BUFFER_BYTES)
+        .max_message_size(Some(max_message_bytes))
+        .max_frame_size(Some(max_frame_bytes))
 }
 
 fn unreachable_edge(

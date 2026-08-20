@@ -16,7 +16,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bytes::Bytes;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use governor::{
     DefaultDirectRateLimiter, DefaultKeyedRateLimiter, Quota as RateQuota, RateLimiter,
 };
@@ -35,12 +35,19 @@ use crate::protocol::{
 };
 use crate::store::{self, DeviceCode, DeviceState, NameClaim, RequestRecord, Store};
 
-const FRAME_QUEUE: usize = 128;
+const FRAME_QUEUE: usize = 16;
 const BODY_QUEUE: usize = 16;
+const WS_FRAME_QUEUE: usize = 2;
 const MAX_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_HEADERS: usize = 128;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(10);
+const WS_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+const WS_BUDGET_WINDOW: Duration = Duration::from_secs(60);
+const WS_TRAFFIC_LIMIT_REASON: &str = "websocket traffic limit reached";
+const WS_MESSAGE_LIMIT_REASON: &str = "websocket message is too large";
+const WS_IDLE_REASON: &str = "websocket idle timeout";
 
 pub struct Edge {
     config: ServeArgs,
@@ -57,6 +64,10 @@ struct EdgeState {
     anonymous_tunnels: Arc<Semaphore>,
     public_miss_source: Arc<DefaultKeyedRateLimiter<IpAddr>>,
     public_miss_global: Arc<DefaultDirectRateLimiter>,
+    websocket_concurrent: usize,
+    websocket_idle_timeout: Duration,
+    websocket_bytes_per_minute: u64,
+    websocket_frames_per_minute: u64,
 }
 
 struct Session {
@@ -65,10 +76,14 @@ struct Session {
     ws_pending: Mutex<HashMap<u64, mpsc::Sender<WsMessage>>>,
     next_request: Arc<AtomicU64>,
     concurrency: Arc<Semaphore>,
+    websocket_concurrency: Arc<Semaphore>,
     session_id: i64,
     endpoint_id: i64,
     requests_per_minute: u32,
     settings: ForwardSettings,
+    websocket_idle_timeout: Duration,
+    websocket_bytes_per_minute: u64,
+    websocket_frames_per_minute: u64,
     store: Store,
     _tunnel_permit: Option<OwnedSemaphorePermit>,
 }
@@ -83,6 +98,41 @@ struct Pending {
     bytes_in: AtomicU64,
     bytes_out: AtomicU64,
     recorded: AtomicBool,
+}
+
+struct WsBudget {
+    window_started: Instant,
+    bytes: u64,
+    frames: u64,
+    max_bytes: u64,
+    max_frames: u64,
+}
+
+impl WsBudget {
+    fn new(max_bytes: u64, max_frames: u64) -> Self {
+        Self {
+            window_started: Instant::now(),
+            bytes: 0,
+            frames: 0,
+            max_bytes,
+            max_frames,
+        }
+    }
+
+    fn allow(&mut self, message: &WsMessage) -> bool {
+        if self.window_started.elapsed() >= WS_BUDGET_WINDOW {
+            self.window_started = Instant::now();
+            self.bytes = 0;
+            self.frames = 0;
+        }
+        let bytes = message.len() as u64;
+        if self.frames >= self.max_frames || bytes > self.max_bytes.saturating_sub(self.bytes) {
+            return false;
+        }
+        self.frames += 1;
+        self.bytes += bytes;
+        true
+    }
 }
 
 struct ResponseHead {
@@ -126,6 +176,10 @@ impl Edge {
             public_miss_global: Arc::new(RateLimiter::direct(RateQuota::per_minute(
                 NonZeroU32::new(300).expect("nonzero public miss global limit"),
             ))),
+            websocket_concurrent: config.websocket_concurrent(),
+            websocket_idle_timeout: config.websocket_idle_timeout(),
+            websocket_bytes_per_minute: config.websocket_bytes_per_minute(),
+            websocket_frames_per_minute: config.websocket_frames_per_minute(),
             config: config.clone(),
         };
         let mut source_limit = GovernorConfigBuilder::default();
@@ -199,6 +253,13 @@ impl Edge {
             config.anonymous_tunnels,
             config.anonymous_requests
         );
+        println!(
+            "  websocket {} concurrent · {} MiB/min · {} frames/min · {}s idle timeout",
+            config.websocket_concurrent(),
+            config.websocket_bytes_per_minute() / (1024 * 1024),
+            config.websocket_frames_per_minute(),
+            config.websocket_idle_timeout().as_secs()
+        );
         match &config.approval_secret {
             Some(_) => println!("  login    accounts require the approval secret at /device"),
             None => println!("  login    disabled, this edge serves anonymous tunnels only"),
@@ -255,7 +316,36 @@ async fn open_tunnel(
     websocket: WebSocketUpgrade,
     State(state): State<EdgeState>,
 ) -> impl IntoResponse {
-    websocket.on_upgrade(move |socket| serve_tunnel(socket, state))
+    configure_tunnel_websocket(websocket).on_upgrade(move |socket| serve_tunnel(socket, state))
+}
+
+fn configure_websocket(websocket: WebSocketUpgrade) -> WebSocketUpgrade {
+    configure_websocket_limits(
+        websocket,
+        protocol::WS_MAX_FRAME_BYTES,
+        protocol::WS_MAX_MESSAGE_BYTES,
+    )
+}
+
+fn configure_tunnel_websocket(websocket: WebSocketUpgrade) -> WebSocketUpgrade {
+    configure_websocket_limits(
+        websocket,
+        protocol::WS_CONTROL_MAX_FRAME_BYTES,
+        protocol::WS_CONTROL_MAX_MESSAGE_BYTES,
+    )
+}
+
+fn configure_websocket_limits(
+    websocket: WebSocketUpgrade,
+    max_frame_bytes: usize,
+    max_message_bytes: usize,
+) -> WebSocketUpgrade {
+    websocket
+        .read_buffer_size(protocol::WS_READ_BUFFER_BYTES)
+        .write_buffer_size(protocol::WS_WRITE_BUFFER_BYTES)
+        .max_write_buffer_size(protocol::WS_MAX_WRITE_BUFFER_BYTES)
+        .max_frame_size(max_frame_bytes)
+        .max_message_size(max_message_bytes)
 }
 
 struct Granted {
@@ -272,7 +362,7 @@ async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted>
     };
     let open = protocol::decode::<OpenTunnel>(&message).ok()?;
     if open.version != protocol::VERSION {
-        let _ = socket.send(Message::Close(None)).await;
+        let _ = send_ws_message(socket, Message::Close(None)).await;
         return None;
     }
 
@@ -401,7 +491,9 @@ async fn negotiate(socket: &mut WebSocket, state: &EdgeState) -> Option<Granted>
         settings: settings.clone(),
     }))
     .ok()?;
-    socket.send(Message::Binary(opened.into())).await.ok()?;
+    send_ws_message(socket, Message::Binary(opened.into()))
+        .await
+        .ok()?;
 
     Some(Granted {
         name,
@@ -431,10 +523,18 @@ async fn serve_tunnel(mut socket: WebSocket, state: EdgeState) {
         ws_pending: Mutex::new(HashMap::new()),
         next_request: state.next_request.clone(),
         concurrency: Arc::new(Semaphore::new(settings.max_concurrent_exchanges)),
+        websocket_concurrency: Arc::new(Semaphore::new(
+            settings
+                .max_concurrent_exchanges
+                .min(state.websocket_concurrent),
+        )),
         session_id,
         endpoint_id,
         requests_per_minute: settings.requests_per_minute,
         settings,
+        websocket_idle_timeout: state.websocket_idle_timeout,
+        websocket_bytes_per_minute: state.websocket_bytes_per_minute,
+        websocket_frames_per_minute: state.websocket_frames_per_minute,
         store: state.store.clone(),
         _tunnel_permit: tunnel_permit,
     });
@@ -450,7 +550,12 @@ async fn serve_tunnel(mut socket: WebSocket, state: EdgeState) {
             frame = requests.recv() => {
                 let Some(frame) = frame else { break };
                 let Ok(bytes) = protocol::encode(&frame) else { break };
-                if writer.send(Message::Binary(bytes.into())).await.is_err() { break; }
+                if send_ws_message(&mut writer, Message::Binary(bytes.into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
             }
             message = reader.next() => {
                 let Some(Ok(Message::Binary(bytes))) = message else { break };
@@ -510,7 +615,12 @@ async fn handle_client_frame(session: &Session, frame: ClientFrame) {
             }
         }
         ClientFrame::Error { id, reason } => {
-            session.ws_pending.lock().await.remove(&id);
+            if let Some(sender) = session.ws_pending.lock().await.remove(&id) {
+                let _ = sender.try_send(WsMessage::Close {
+                    code: Some(1011),
+                    reason: truncate_close_reason(&reason),
+                });
+            }
             if let Some(pending) = session.take_pending(id).await {
                 pending.respond(Err(reason)).await;
                 record_request(session, pending, Some(502)).await;
@@ -518,8 +628,11 @@ async fn handle_client_frame(session: &Session, frame: ClientFrame) {
         }
         ClientFrame::WsFrame { id, message } => {
             let sender = session.ws_pending.lock().await.get(&id).cloned();
-            if let Some(sender) = sender {
-                let _ = sender.send(message).await;
+            if let Some(sender) = sender
+                && sender.try_send(message).is_err()
+            {
+                session.ws_pending.lock().await.remove(&id);
+                let _ = session.send(EdgeFrame::Cancel { id }).await;
             }
         }
     }
@@ -558,6 +671,18 @@ fn axum_message(message: &WsMessage) -> Message {
             })),
             None => Message::Close(None),
         },
+    }
+}
+
+async fn send_ws_message<S>(writer: &mut S, message: Message) -> Result<(), String>
+where
+    S: Sink<Message> + Unpin,
+    S::Error: std::fmt::Display,
+{
+    match tokio::time::timeout(WS_WRITE_TIMEOUT, writer.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("WebSocket write failed: {error}")),
+        Err(_) => Err("WebSocket write timed out".into()),
     }
 }
 
@@ -651,6 +776,7 @@ async fn forward_public(State(state): State<EdgeState>, request: Request) -> Res
             Ok(ws) => ws,
             Err(rejection) => return rejection.into_response(),
         };
+        let ws = configure_websocket(ws);
         if !session.take_request_budget().await {
             return tunnel_page(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -1152,10 +1278,12 @@ impl Session {
         headers: Vec<protocol::Header>,
         protocol: Option<String>,
     ) {
-        let Ok(permit) = self.concurrency.clone().try_acquire_owned() else {
-            let _ = socket
-                .send(close_message(1013, "too many concurrent exchanges"))
-                .await;
+        let Ok(permit) = self.websocket_concurrency.clone().try_acquire_owned() else {
+            let _ = send_ws_message(
+                &mut socket,
+                close_message(1013, "too many concurrent exchanges"),
+            )
+            .await;
             return;
         };
         let id = self.next_request.fetch_add(1, Ordering::Relaxed);
@@ -1172,9 +1300,7 @@ impl Session {
             bytes_out: AtomicU64::new(0),
             recorded: AtomicBool::new(false),
         });
-        let (outgoing, mut incoming) = mpsc::channel::<WsMessage>(BODY_QUEUE);
-        // The body channel exists for HTTP exchanges; WebSocket frames travel
-        // through `ws_pending` instead.
+        let (outgoing, mut incoming) = mpsc::channel::<WsMessage>(WS_FRAME_QUEUE);
         self.pending.lock().await.insert(id, pending.clone());
         self.ws_pending.lock().await.insert(id, outgoing);
         if self
@@ -1200,57 +1326,122 @@ impl Session {
             Ok(Ok(Ok(head))) if head.status == 101 => {}
             Ok(Ok(Ok(_))) => {
                 self.drop_ws_exchange(id).await;
-                let _ = socket
-                    .send(close_message(
-                        1003,
-                        "local service refused the WebSocket upgrade",
-                    ))
-                    .await;
+                let _ = send_ws_message(
+                    &mut socket,
+                    close_message(1003, "local service refused the WebSocket upgrade"),
+                )
+                .await;
                 return;
             }
             Ok(Ok(Err(reason))) => {
                 self.drop_ws_exchange(id).await;
-                let _ = socket
-                    .send(close_message(
-                        1011,
-                        &format!("local service unavailable: {reason}"),
-                    ))
-                    .await;
+                let _ = send_ws_message(
+                    &mut socket,
+                    close_message(1011, &format!("local service unavailable: {reason}")),
+                )
+                .await;
                 return;
             }
             Ok(Err(_)) => {
                 self.drop_ws_exchange(id).await;
-                let _ = socket
-                    .send(close_message(
-                        1011,
-                        "local service disconnected during the handshake",
-                    ))
-                    .await;
+                let _ = send_ws_message(
+                    &mut socket,
+                    close_message(1011, "local service disconnected during the handshake"),
+                )
+                .await;
                 return;
             }
             Err(_) => {
                 self.drop_ws_exchange(id).await;
                 let _ = self.send(EdgeFrame::Cancel { id }).await;
-                let _ = socket
-                    .send(close_message(1011, "local service did not respond in time"))
-                    .await;
+                let _ = send_ws_message(
+                    &mut socket,
+                    close_message(1011, "local service did not respond in time"),
+                )
+                .await;
                 return;
             }
         };
         pending.status.store(101, Ordering::Relaxed);
 
         let (mut writer, mut reader) = socket.split();
+        let mut budget = WsBudget::new(
+            self.websocket_bytes_per_minute,
+            self.websocket_frames_per_minute,
+        );
+        let mut idle = Box::pin(tokio::time::sleep(self.websocket_idle_timeout));
+        let heartbeat_interval = self
+            .websocket_idle_timeout
+            .min(Duration::from_secs(protocol::WS_HEARTBEAT_INTERVAL_SECS));
+        let mut heartbeat = tokio::time::interval(heartbeat_interval);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
             tokio::select! {
+                _ = &mut idle => {
+                    let _ = send_ws_message(&mut writer, close_message(1001, WS_IDLE_REASON)).await;
+                    let _ = self
+                        .send(EdgeFrame::WsFrame {
+                            id,
+                            message: WsMessage::Close {
+                                code: Some(1001),
+                                reason: WS_IDLE_REASON.into(),
+                            },
+                        })
+                        .await;
+                    break;
+                }
+                _ = heartbeat.tick() => {
+                    if send_ws_message(&mut writer, Message::Ping(Vec::new().into())).await.is_err() {
+                        break;
+                    }
+                }
                 message = incoming.recv() => {
                     let Some(message) = message else {
-                        let _ = writer
-                            .send(close_message(1011, "local service disconnected"))
-                            .await;
+                        let _ = send_ws_message(
+                            &mut writer,
+                            close_message(1011, "local service disconnected"),
+                        )
+                        .await;
                         break;
                     };
                     pending.bytes_out.fetch_add(message.len() as u64, Ordering::Relaxed);
-                    if writer.send(axum_message(&message)).await.is_err() {
+                    if message.len() > protocol::WS_MAX_FRAME_BYTES {
+                        let _ = send_ws_message(
+                            &mut writer,
+                            close_message(1009, WS_MESSAGE_LIMIT_REASON),
+                        )
+                        .await;
+                        let _ = self
+                            .send(EdgeFrame::WsFrame {
+                                id,
+                                message: WsMessage::Close {
+                                    code: Some(1009),
+                                    reason: WS_MESSAGE_LIMIT_REASON.into(),
+                                },
+                            })
+                            .await;
+                        break;
+                    }
+                    if !budget.allow(&message) {
+                        let _ = send_ws_message(
+                            &mut writer,
+                            close_message(1008, WS_TRAFFIC_LIMIT_REASON),
+                        )
+                        .await;
+                        let _ = self
+                            .send(EdgeFrame::WsFrame {
+                                id,
+                                message: WsMessage::Close {
+                                    code: Some(1008),
+                                    reason: WS_TRAFFIC_LIMIT_REASON.into(),
+                                },
+                            })
+                            .await;
+                        break;
+                    }
+                    idle.as_mut().reset(tokio::time::Instant::now() + self.websocket_idle_timeout);
+                    if send_ws_message(&mut writer, axum_message(&message)).await.is_err() {
                         break;
                     }
                     if message.is_close() {
@@ -1261,6 +1452,41 @@ impl Session {
                     let Some(Ok(message)) = message else { break };
                     let relayed = ws_message(&message);
                     pending.bytes_in.fetch_add(relayed.len() as u64, Ordering::Relaxed);
+                    if relayed.len() > protocol::WS_MAX_FRAME_BYTES {
+                        let _ = send_ws_message(
+                            &mut writer,
+                            close_message(1009, WS_MESSAGE_LIMIT_REASON),
+                        )
+                        .await;
+                        let _ = self
+                            .send(EdgeFrame::WsFrame {
+                                id,
+                                message: WsMessage::Close {
+                                    code: Some(1009),
+                                    reason: WS_MESSAGE_LIMIT_REASON.into(),
+                                },
+                            })
+                            .await;
+                        break;
+                    }
+                    if !budget.allow(&relayed) {
+                        let _ = send_ws_message(
+                            &mut writer,
+                            close_message(1008, WS_TRAFFIC_LIMIT_REASON),
+                        )
+                        .await;
+                        let _ = self
+                            .send(EdgeFrame::WsFrame {
+                                id,
+                                message: WsMessage::Close {
+                                    code: Some(1008),
+                                    reason: WS_TRAFFIC_LIMIT_REASON.into(),
+                                },
+                            })
+                            .await;
+                        break;
+                    }
+                    idle.as_mut().reset(tokio::time::Instant::now() + self.websocket_idle_timeout);
                     if self
                         .send(EdgeFrame::WsFrame {
                             id,
@@ -1391,10 +1617,19 @@ impl Session {
     }
 
     async fn send(&self, frame: EdgeFrame) -> Result<(), String> {
-        self.outgoing
-            .send(frame)
-            .await
-            .map_err(|_| "tunnel disconnected".to_string())
+        match self.outgoing.try_send(frame) {
+            Ok(()) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err("tunnel disconnected".into())
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(frame)) => {
+                match tokio::time::timeout(FRAME_SEND_TIMEOUT, self.outgoing.send(frame)).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(_)) => Err("tunnel disconnected".into()),
+                    Err(_) => Err("tunnel send queue stayed full".into()),
+                }
+            }
+        }
     }
 
     async fn pending(&self, id: u64) -> Option<Arc<Pending>> {
@@ -1431,9 +1666,9 @@ async fn reject(socket: &mut WebSocket, reason: &str) {
         reason: reason.to_string(),
     };
     if let Ok(bytes) = protocol::encode(&rejected) {
-        let _ = socket.send(Message::Binary(bytes.into())).await;
+        let _ = send_ws_message(socket, Message::Binary(bytes.into())).await;
     }
-    let _ = socket.send(Message::Close(None)).await;
+    let _ = send_ws_message(socket, Message::Close(None)).await;
 }
 
 impl Pending {
@@ -1503,4 +1738,19 @@ fn valid_name(name: &str) -> bool {
 fn normalize_account_name(name: &str) -> Option<String> {
     let normalized = name.trim().to_ascii_lowercase();
     protocol::valid_name(&normalized).then_some(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WsBudget;
+    use crate::protocol::WsMessage;
+
+    #[test]
+    fn websocket_budget_bounds_bytes_and_frames() {
+        let mut budget = WsBudget::new(5, 2);
+        assert!(budget.allow(&WsMessage::Text("1234".into())));
+        assert!(!budget.allow(&WsMessage::Text("12".into())));
+        assert!(budget.allow(&WsMessage::Text("1".into())));
+        assert!(!budget.allow(&WsMessage::Text("".into())));
+    }
 }

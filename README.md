@@ -163,6 +163,16 @@ exchange.
 The same values are available as command-line options, which is useful for
 non-interactive runs.
 
+WebSocket forwarding is bounded independently from HTTP exchanges. Each frame
+and relayed message is limited to 4 MiB. The parser rejects fragmented input
+above 16 MiB before it reaches the relay, and each connection has a 5-minute
+heartbeat timeout. The edge defaults to 32 concurrent WebSocket exchanges,
+1 GiB and 100,000 frames per connection per minute. Tune
+`--websocket-concurrent`, `--websocket-idle-timeout-secs`,
+`--websocket-bytes-per-minute-mib`, and `--websocket-frames-per-minute` for a
+larger self-hosted deployment. Relay queues are bounded, so a slow peer closes
+only its WebSocket instead of growing memory without a limit.
+
 ## Self-host an edge
 
 ### Run the binary

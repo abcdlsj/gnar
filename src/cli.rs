@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -303,6 +304,34 @@ pub struct ServeArgs {
         help = "Requests per minute for an anonymous tunnel"
     )]
     pub anonymous_requests: u32,
+
+    #[arg(
+        long,
+        default_value_t = crate::protocol::WS_CONCURRENT,
+        help = "Maximum concurrent WebSocket exchanges per tunnel"
+    )]
+    pub websocket_concurrent: usize,
+
+    #[arg(
+        long,
+        default_value_t = crate::protocol::WS_IDLE_TIMEOUT_SECS,
+        help = "Close WebSocket connections that do not answer heartbeats"
+    )]
+    pub websocket_idle_timeout_secs: u64,
+
+    #[arg(
+        long,
+        default_value_t = crate::protocol::WS_BYTES_PER_MINUTE_MIB,
+        help = "Maximum WebSocket payload per connection per minute in MiB"
+    )]
+    pub websocket_bytes_per_minute_mib: u64,
+
+    #[arg(
+        long,
+        default_value_t = crate::protocol::WS_FRAMES_PER_MINUTE,
+        help = "Maximum WebSocket frames per connection per minute"
+    )]
+    pub websocket_frames_per_minute: u64,
 }
 
 impl ServeArgs {
@@ -318,6 +347,24 @@ impl ServeArgs {
                 requests_per_minute: self.anonymous_requests,
             }
         }
+    }
+
+    pub fn websocket_concurrent(&self) -> usize {
+        self.websocket_concurrent.clamp(1, 512)
+    }
+
+    pub fn websocket_idle_timeout(&self) -> Duration {
+        Duration::from_secs(self.websocket_idle_timeout_secs.clamp(1, 24 * 60 * 60))
+    }
+
+    pub fn websocket_bytes_per_minute(&self) -> u64 {
+        self.websocket_bytes_per_minute_mib
+            .clamp(1, 1024 * 1024)
+            .saturating_mul(1024 * 1024)
+    }
+
+    pub fn websocket_frames_per_minute(&self) -> u64 {
+        self.websocket_frames_per_minute.clamp(1, 10_000_000)
     }
 }
 

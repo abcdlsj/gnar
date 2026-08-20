@@ -681,8 +681,15 @@ fn websocket_url(edge: &str) -> Result<Url, AppError> {
         "https" => url.set_scheme("wss").unwrap(),
         _ => return Err(AppError::Edge("edge must use http:// or https://".into())),
     }
-    url.set_path("/v1/tunnels");
+    let base = url.path().trim_end_matches('/');
+    let path = if base.is_empty() {
+        "/v1/tunnels".to_string()
+    } else {
+        format!("{base}/v1/tunnels")
+    };
+    url.set_path(&path);
     url.set_query(None);
+    url.set_fragment(None);
     Ok(url)
 }
 
@@ -732,7 +739,9 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
     use url::Url;
 
-    use super::{WsMessage, normalize_name, resolve_target, tungstenite_message, ws_message};
+    use super::{
+        WsMessage, normalize_name, resolve_target, tungstenite_message, websocket_url, ws_message,
+    };
 
     #[test]
     fn target_base_path_and_query_are_preserved() {
@@ -751,6 +760,16 @@ mod tests {
         assert_eq!(
             normalize_name("My Local API".into()).unwrap(),
             "my-local-api"
+        );
+    }
+
+    #[test]
+    fn websocket_endpoint_keeps_an_edge_base_path() {
+        assert_eq!(
+            websocket_url("https://gnar.example.com/self-hosted/")
+                .unwrap()
+                .as_str(),
+            "wss://gnar.example.com/self-hosted/v1/tunnels"
         );
     }
 

@@ -160,6 +160,13 @@ impl Edge {
             .layer::<_, Infallible>(
                 GovernorLayer::new(source_limit.clone()).error_handler(device_rate_limited),
             );
+        let limited_device_enrollment = post(enroll_device)
+            .layer::<_, Infallible>(
+                GovernorLayer::new(global_limit.clone()).error_handler(enrollment_rate_limited),
+            )
+            .layer::<_, Infallible>(
+                GovernorLayer::new(source_limit.clone()).error_handler(enrollment_rate_limited),
+            );
         let limited_device_approval = post(approve_device_page)
             .layer::<_, Infallible>(
                 GovernorLayer::new(global_limit).error_handler(device_rate_limited),
@@ -172,6 +179,7 @@ impl Edge {
             .route("/healthz", get(|| async { "ok" }))
             .route("/v1/tunnels", get(open_tunnel))
             .route("/v1/device/code", limited_device_code)
+            .route("/v1/device/enroll", limited_device_enrollment)
             .route("/v1/device/token", post(redeem_device_code))
             .route("/v1/account", get(describe_account))
             .route("/v1/endpoints/release", post(release_endpoint))
@@ -853,6 +861,70 @@ async fn request_device_code(State(state): State<EdgeState>) -> Response {
     .into_response()
 }
 
+async fn enroll_device(
+    State(state): State<EdgeState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let Some(expected) = &state.config.approval_secret else {
+        return enrollment_json_error(
+            StatusCode::NOT_FOUND,
+            "enrollment_disabled",
+            "this edge serves anonymous tunnels only; its operator must configure an approval secret",
+        );
+    };
+    let Some(enrollment_key) = body.get("enrollment_key").and_then(|value| value.as_str()) else {
+        return enrollment_json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_enrollment_key",
+            "the enrollment key was not accepted",
+        );
+    };
+    if !secrets_match(expected, enrollment_key) {
+        tracing::warn!("rejected enrollment with an invalid key");
+        return enrollment_json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_enrollment_key",
+            "the enrollment key was not accepted",
+        );
+    }
+
+    let Some(account) = body.get("account").and_then(|value| value.as_str()) else {
+        return enrollment_json_error(
+            StatusCode::BAD_REQUEST,
+            "malformed_account",
+            "account must be 1 to 48 lowercase letters, numbers, or hyphens",
+        );
+    };
+    let Some(account) = normalize_account_name(account) else {
+        return enrollment_json_error(
+            StatusCode::BAD_REQUEST,
+            "malformed_account",
+            "account must be 1 to 48 lowercase letters, numbers, or hyphens",
+        );
+    };
+
+    let token = format!("gnar_{}", random_secret());
+    if state
+        .store
+        .enroll_account(account.clone(), token.clone())
+        .await
+        .is_err()
+    {
+        tracing::error!("could not persist an enrolled account");
+        return enrollment_json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "edge_unavailable",
+            "the edge could not persist the account; try again",
+        );
+    }
+    Json(serde_json::json!({
+        "status": "enrolled",
+        "account": account,
+        "token": token,
+    }))
+    .into_response()
+}
+
 async fn redeem_device_code(
     State(state): State<EdgeState>,
     Json(body): Json<serde_json::Value>,
@@ -925,14 +997,13 @@ async fn approve_device_page(
         );
     }
 
-    let account = form.account.trim().to_ascii_lowercase();
-    if !valid_name(&account) {
+    let Some(account) = normalize_account_name(&form.account) else {
         return device_html(
             StatusCode::BAD_REQUEST,
             "<h1>Not approved</h1><p>Use 1 to 48 lowercase letters, numbers, or hyphens \
              for the account name.</p>",
         );
-    }
+    };
 
     let token = format!("gnar_{}", random_secret());
     match state
@@ -963,6 +1034,27 @@ fn device_rate_limited(error: GovernorError) -> Response {
     (
         StatusCode::TOO_MANY_REQUESTS,
         "too many login attempts; retry later",
+    )
+        .into_response()
+}
+
+fn enrollment_rate_limited(error: GovernorError) -> Response {
+    tracing::warn!(reason = %error, "limited enrollment request");
+    enrollment_json_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate_limited",
+        "too many enrollment attempts; retry later",
+    )
+}
+
+fn enrollment_json_error(status: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "status": "error",
+            "code": code,
+            "message": message,
+        })),
     )
         .into_response()
 }
@@ -1405,12 +1497,10 @@ fn random_name() -> String {
 }
 
 fn valid_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= protocol::MAX_NAME_LENGTH
-        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+    protocol::valid_name(name)
+}
+
+fn normalize_account_name(name: &str) -> Option<String> {
+    let normalized = name.trim().to_ascii_lowercase();
+    protocol::valid_name(&normalized).then_some(normalized)
 }

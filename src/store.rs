@@ -65,6 +65,11 @@ enum Command {
         token: String,
         reply: Reply<Option<String>>,
     },
+    EnrollAccount {
+        account_name: String,
+        token_hash: String,
+        reply: Reply<()>,
+    },
     DenyDeviceCode(String, Reply<bool>),
     PollDeviceCode(String, Reply<DeviceState>),
     CountLiveTunnels(i64, Reply<usize>),
@@ -160,6 +165,16 @@ impl Store {
             account_name,
             token_hash,
             token,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn enroll_account(&self, account_name: String, token: String) -> Result<(), String> {
+        let token_hash = hash_secret(&token);
+        self.request(|reply| Command::EnrollAccount {
+            account_name,
+            token_hash,
             reply,
         })
         .await
@@ -273,6 +288,14 @@ fn apply(connection: &Connection, command: Command, issued: &mut HashMap<String,
             }
             send(reply, result.map(|hash| hash.map(|_| account_name)));
         }
+        Command::EnrollAccount {
+            account_name,
+            token_hash,
+            reply,
+        } => send(
+            reply,
+            create_account_token(connection, &account_name, &token_hash, "enrollment").map(|_| ()),
+        ),
         Command::DenyDeviceCode(user_code, reply) => {
             send(reply, deny_device_code(connection, &user_code));
         }
@@ -659,6 +682,21 @@ fn approve_device_code(
         return Ok(None);
     };
 
+    let account_id = create_account_token(connection, account_name, token_hash, "device")?;
+    connection.execute(
+        "UPDATE device_authorizations SET status = 'approved', account_id = ?2
+         WHERE device_code_hash = ?1",
+        params![device_code_hash, account_id],
+    )?;
+    Ok(Some(device_code_hash))
+}
+
+fn create_account_token(
+    connection: &Connection,
+    account_name: &str,
+    token_hash: &str,
+    label: &str,
+) -> rusqlite::Result<i64> {
     connection.execute(
         "INSERT INTO accounts(name, created_at) VALUES (?1, unixepoch())
          ON CONFLICT(name) DO NOTHING",
@@ -671,15 +709,10 @@ fn approve_device_code(
     )?;
     connection.execute(
         "INSERT INTO account_tokens(account_id, token_hash, label, created_at)
-         VALUES (?1, ?2, 'device', unixepoch())",
-        params![account_id, token_hash],
+         VALUES (?1, ?2, ?3, unixepoch())",
+        params![account_id, token_hash, label],
     )?;
-    connection.execute(
-        "UPDATE device_authorizations SET status = 'approved', account_id = ?2
-         WHERE device_code_hash = ?1",
-        params![device_code_hash, account_id],
-    )?;
-    Ok(Some(device_code_hash))
+    Ok(account_id)
 }
 
 fn poll_device_code(connection: &Connection, hash: &str) -> rusqlite::Result<DeviceState> {

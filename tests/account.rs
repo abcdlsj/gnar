@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::net::TcpListener as StdTcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -32,6 +33,15 @@ impl Edge {
 }
 
 const APPROVAL_SECRET: &str = "let-me-in";
+
+fn gnar_store_hash(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unknown_token_is_refused_rather_than_treated_as_anonymous() {
@@ -76,6 +86,212 @@ async fn a_device_code_becomes_a_token_only_after_approval() {
         redeem(&client, &edge, &device_code).await["status"],
         "expired",
         "a redeemed device code must not yield its token again"
+    );
+    edge.cleanup();
+}
+
+#[tokio::test]
+async fn enrollment_issues_a_persistent_token_without_returning_the_key_to_logs() {
+    let edge = start_edge(&[]).await;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/v1/device/enroll", edge.url))
+        .json(&serde_json::json!({
+            "account": "Alice",
+            "enrollment_key": APPROVAL_SECRET,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let enrolled: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(enrolled["status"], "enrolled");
+    assert_eq!(enrolled["account"], "alice");
+    let token = enrolled["token"].as_str().unwrap().to_string();
+    assert!(!token.is_empty());
+
+    let account: serde_json::Value = client
+        .get(format!("{}/v1/account", edge.url))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account["account"], "alice");
+
+    let connection = rusqlite::Connection::open(&edge.database).unwrap();
+    let stored_hash: String = connection
+        .query_row(
+            "SELECT token_hash FROM account_tokens WHERE label = 'enrollment'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_hash, gnar_store_hash(&token));
+    assert_ne!(stored_hash, token);
+    edge.cleanup();
+}
+
+#[tokio::test]
+async fn enrollment_returns_stable_authorization_and_validation_errors() {
+    let anonymous = start_anonymous_edge(&[]).await;
+    let client = reqwest::Client::new();
+    let disabled = client
+        .post(format!("{}/v1/device/enroll", anonymous.url))
+        .json(&serde_json::json!({
+            "account": "alice",
+            "enrollment_key": APPROVAL_SECRET,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(disabled.status(), reqwest::StatusCode::NOT_FOUND);
+    let disabled_body: serde_json::Value = disabled.json().await.unwrap();
+    assert_eq!(disabled_body["code"], "enrollment_disabled");
+    anonymous.cleanup();
+
+    let edge = start_edge(&[]).await;
+    let invalid_key = client
+        .post(format!("{}/v1/device/enroll", edge.url))
+        .json(&serde_json::json!({
+            "account": "alice",
+            "enrollment_key": "wrong-key",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_key.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(
+        invalid_key.json::<serde_json::Value>().await.unwrap()["code"],
+        "invalid_enrollment_key"
+    );
+
+    let malformed = client
+        .post(format!("{}/v1/device/enroll", edge.url))
+        .json(&serde_json::json!({
+            "account": "not a valid account",
+            "enrollment_key": APPROVAL_SECRET,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(malformed.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        malformed.json::<serde_json::Value>().await.unwrap()["code"],
+        "malformed_account"
+    );
+    edge.cleanup();
+}
+
+#[tokio::test]
+async fn enrollment_uses_the_device_login_rate_limit() {
+    let edge = start_edge(&[]).await;
+    let client = reqwest::Client::new();
+    let mut statuses = Vec::new();
+    for _ in 0..7 {
+        statuses.push(
+            client
+                .post(format!("{}/v1/device/enroll", edge.url))
+                .json(&serde_json::json!({
+                    "account": "alice",
+                    "enrollment_key": "wrong-key",
+                }))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+        );
+    }
+    assert_eq!(statuses[6], reqwest::StatusCode::TOO_MANY_REQUESTS);
+    edge.cleanup();
+}
+
+#[tokio::test]
+async fn enrollment_cli_emits_json_without_the_key_or_token() {
+    let edge = start_edge(&[]).await;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gnar"));
+    command
+        .args([
+            "login",
+            "--edge",
+            &edge.url,
+            "--account",
+            "Alice",
+            "--enrollment-key-stdin",
+            "--json",
+        ])
+        .env("GNAR_CONFIG_DIR", &edge.config_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{APPROVAL_SECRET}\n").as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(APPROVAL_SECRET));
+    let token = serde_json::from_str::<serde_json::Value>(
+        &std::fs::read_to_string(edge.config_dir.join("credentials.json")).unwrap(),
+    )
+    .unwrap()["edges"][&edge.url]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!stdout.contains(&token));
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events[0]["type"], "enrollment_started");
+    assert_eq!(events[1]["type"], "enrollment_succeeded");
+    edge.cleanup();
+}
+
+#[tokio::test]
+async fn enrollment_cli_errors_are_json_and_do_not_echo_the_key() {
+    let edge = start_edge(&[]).await;
+    let secret = "wrong-key";
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gnar"));
+    command
+        .args([
+            "login",
+            "--edge",
+            &edge.url,
+            "--account",
+            "Alice",
+            "--enrollment-key-stdin",
+            "--json",
+        ])
+        .env("GNAR_CONFIG_DIR", &edge.config_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{secret}\n").as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains(secret));
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.last().unwrap()["type"], "error");
+    assert_eq!(
+        events.last().unwrap()["message"],
+        "edge connection failed: the enrollment key was rejected; check the operator-provided key and try again (HTTP 403)"
     );
     edge.cleanup();
 }

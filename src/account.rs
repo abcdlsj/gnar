@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -8,8 +8,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppError;
+use crate::output::{Event, Output};
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(600);
+const MAX_ENROLLMENT_KEY_BYTES: usize = 4096;
 
 #[derive(Default, Deserialize, Serialize)]
 struct Credentials {
@@ -52,7 +54,7 @@ pub async fn login(edge: &str) -> Result<(), AppError> {
         .map_err(|error| AppError::Edge(error.to_string()))?;
 
     let start: DeviceCodeResponse = client
-        .post(format!("{}/v1/device/code", edge.trim_end_matches('/')))
+        .post(edge_endpoint(edge, "/v1/device/code")?)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
@@ -80,7 +82,7 @@ pub async fn login(edge: &str) -> Result<(), AppError> {
         tokio::time::sleep(interval).await;
 
         let poll: TokenResponse = client
-            .post(format!("{}/v1/device/token", edge.trim_end_matches('/')))
+            .post(edge_endpoint(edge, "/v1/device/token")?)
             .json(&serde_json::json!({ "device_code": start.device_code }))
             .send()
             .await
@@ -118,6 +120,42 @@ pub async fn login(edge: &str) -> Result<(), AppError> {
     }
 }
 
+pub async fn enroll(edge: &str, account: &str, output: &Output) -> Result<(), AppError> {
+    let account = normalize_account(account)?;
+    output.event(Event::EnrollmentStarted { account: &account })?;
+    let enrollment_key = read_enrollment_key()?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| AppError::Edge(error.to_string()))?;
+    let endpoint = edge_endpoint(edge, "/v1/device/enroll")?;
+    let response = client
+        .post(endpoint)
+        .json(&EnrollmentRequest {
+            account: &account,
+            enrollment_key: &enrollment_key,
+        })
+        .send()
+        .await
+        .map_err(|error| unreachable_edge(edge, &error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(enrollment_error(status, response).await);
+    }
+
+    let reply: EnrollmentResponse = response.json().await.map_err(|_| {
+        AppError::Edge("edge sent an unexpected enrollment reply; try again".into())
+    })?;
+    if reply.status != "enrolled" || reply.token.is_empty() || reply.account != account {
+        return Err(AppError::Edge(
+            "edge sent an incomplete enrollment reply; try again".into(),
+        ));
+    }
+    store_token(edge, &reply.token)?;
+    output.event(Event::EnrollmentSucceeded { account: &account })?;
+    Ok(())
+}
+
 pub async fn release(edge: &str, name: &str) -> Result<(), AppError> {
     let Some(token) = token_for(edge) else {
         return Err(AppError::Edge(format!(
@@ -130,8 +168,8 @@ pub async fn release(edge: &str, name: &str) -> Result<(), AppError> {
         .map_err(|error| AppError::Edge(error.to_string()))?;
     let response = client
         .post(format!(
-            "{}/v1/endpoints/release?name={name}",
-            edge.trim_end_matches('/')
+            "{}?name={name}",
+            edge_endpoint(edge, "/v1/endpoints/release")?
         ))
         .bearer_auth(&token)
         .send()
@@ -176,7 +214,7 @@ pub async fn whoami(edge: &str) -> Result<(), AppError> {
         .build()
         .map_err(|error| AppError::Edge(error.to_string()))?;
     let response: AccountResponse = client
-        .get(format!("{}/v1/account", edge.trim_end_matches('/')))
+        .get(edge_endpoint(edge, "/v1/account")?)
         .bearer_auth(&token)
         .send()
         .await
@@ -201,6 +239,112 @@ fn store_token(edge: &str, token: &str) -> Result<(), AppError> {
 
 fn key(edge: &str) -> String {
     edge.trim_end_matches('/').to_string()
+}
+
+fn edge_endpoint(edge: &str, suffix: &str) -> Result<String, AppError> {
+    let mut url = url::Url::parse(edge)
+        .map_err(|error| AppError::Edge(format!("invalid edge URL: {error}")))?;
+    let base = url.path().trim_end_matches('/');
+    let path = if base.is_empty() {
+        suffix.to_string()
+    } else {
+        format!("{base}{suffix}")
+    };
+    url.set_path(&path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+fn normalize_account(account: &str) -> Result<String, AppError> {
+    let normalized = account.trim().to_ascii_lowercase();
+    if crate::protocol::valid_name(&normalized) {
+        return Ok(normalized);
+    }
+    Err(AppError::Edge(format!(
+        "--account must be 1 to {} lowercase letters, numbers, or hyphens",
+        crate::protocol::MAX_NAME_LENGTH
+    )))
+}
+
+fn read_enrollment_key() -> Result<String, AppError> {
+    let mut stdin = io::stdin().lock();
+    read_enrollment_key_from(&mut stdin)
+}
+
+fn read_enrollment_key_from(reader: &mut impl Read) -> Result<String, AppError> {
+    let mut input = String::new();
+    reader.read_to_string(&mut input).map_err(|error| {
+        AppError::Edge(format!(
+            "could not read the enrollment key from stdin: {error}"
+        ))
+    })?;
+    if input.len() > MAX_ENROLLMENT_KEY_BYTES {
+        return Err(AppError::Edge(
+            "the enrollment key from stdin is too long".into(),
+        ));
+    }
+    let key = input.strip_suffix('\n').unwrap_or(&input);
+    let key = key.strip_suffix('\r').unwrap_or(key);
+    if key.is_empty() || key.contains(['\r', '\n']) {
+        return Err(AppError::Edge(
+            "enrollment key stdin must contain exactly one non-empty line".into(),
+        ));
+    }
+    Ok(key.to_string())
+}
+
+#[derive(Serialize)]
+struct EnrollmentRequest<'a> {
+    account: &'a str,
+    enrollment_key: &'a str,
+}
+
+#[derive(Deserialize)]
+struct EnrollmentResponse {
+    status: String,
+    account: String,
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct EnrollmentErrorResponse {
+    code: Option<String>,
+}
+
+async fn enrollment_error(status: reqwest::StatusCode, response: reqwest::Response) -> AppError {
+    let body = response.bytes().await.unwrap_or_default();
+    let code = serde_json::from_slice::<EnrollmentErrorResponse>(&body)
+        .ok()
+        .and_then(|error| error.code);
+    let reason = match (status, code.as_deref()) {
+        (reqwest::StatusCode::NOT_FOUND, Some("enrollment_disabled")) => {
+            "enrollment is disabled on this edge; ask its operator to configure an approval secret"
+        }
+        (reqwest::StatusCode::FORBIDDEN, Some("invalid_enrollment_key")) => {
+            "the enrollment key was rejected; check the operator-provided key and try again"
+        }
+        (reqwest::StatusCode::BAD_REQUEST, Some("malformed_account")) => {
+            "the account name is invalid; use 1 to 48 lowercase letters, numbers, or hyphens"
+        }
+        (reqwest::StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")) => {
+            "too many enrollment attempts; wait and try again"
+        }
+        (reqwest::StatusCode::SERVICE_UNAVAILABLE, Some("edge_unavailable")) => {
+            "the edge is unavailable; check its health and try again"
+        }
+        (reqwest::StatusCode::NOT_FOUND, _) => {
+            "this edge does not provide enrollment; check the edge URL and its configuration"
+        }
+        (reqwest::StatusCode::TOO_MANY_REQUESTS, _) => {
+            "too many enrollment attempts; wait and try again"
+        }
+        (reqwest::StatusCode::SERVICE_UNAVAILABLE, _) => {
+            "the edge is unavailable; check its health and try again"
+        }
+        _ => "the edge rejected enrollment; check its configuration and try again",
+    };
+    AppError::Edge(format!("{reason} (HTTP {})", status.as_u16()))
 }
 
 fn path() -> Result<PathBuf, AppError> {
@@ -306,7 +450,26 @@ struct AccountResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{Credentials, key};
+    use std::io::{self, Read};
+
+    use super::{Credentials, key, read_enrollment_key_from};
+
+    struct OneRead {
+        input: String,
+        reads: usize,
+    }
+
+    impl Read for OneRead {
+        fn read_to_string(&mut self, output: &mut String) -> io::Result<usize> {
+            self.reads += 1;
+            output.push_str(&self.input);
+            Ok(self.input.len())
+        }
+
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            panic!("enrollment must read stdin with read_to_string");
+        }
+    }
 
     #[test]
     fn edge_key_ignores_a_trailing_slash() {
@@ -342,5 +505,30 @@ mod tests {
         let decoded: Credentials = serde_json::from_str("not json").unwrap_or_default();
 
         assert!(decoded.edges.is_empty());
+    }
+
+    #[test]
+    fn enrollment_key_is_read_once_and_accepts_one_trailing_newline() {
+        let mut reader = OneRead {
+            input: "let-me-in\n".into(),
+            reads: 0,
+        };
+        assert_eq!(read_enrollment_key_from(&mut reader).unwrap(), "let-me-in");
+        assert_eq!(reader.reads, 1);
+    }
+
+    #[test]
+    fn enrollment_key_rejects_multiple_lines_without_echoing_them() {
+        let mut reader = OneRead {
+            input: "let-me-in\nsecond-line".into(),
+            reads: 0,
+        };
+        let error = read_enrollment_key_from(&mut reader)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exactly one"));
+        assert!(!error.contains("let-me-in"));
+        assert!(!error.contains("second-line"));
+        assert_eq!(reader.reads, 1);
     }
 }

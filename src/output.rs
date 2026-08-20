@@ -31,6 +31,12 @@ pub enum Event<'a> {
     },
     EdgeReconnecting,
     EdgeRestored,
+    EnrollmentStarted {
+        account: &'a str,
+    },
+    EnrollmentSucceeded {
+        account: &'a str,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -112,6 +118,12 @@ impl Output {
                     return Ok(());
                 }
                 writeln!(writer, "Edge    connection restored")
+            }
+            Event::EnrollmentStarted { account } => {
+                writeln!(writer, "Enroll  account {account}")
+            }
+            Event::EnrollmentSucceeded { account } => {
+                writeln!(writer, "Signed  in as {account}")
             }
         }
     }

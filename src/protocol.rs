@@ -3,6 +3,17 @@ use serde::{Deserialize, Serialize};
 pub const VERSION: u16 = 2;
 pub const MAX_NAME_LENGTH: usize = 48;
 
+pub fn valid_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= MAX_NAME_LENGTH
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
 pub const MIN_MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 pub const MAX_MAX_REQUEST_BYTES: u64 = 256 * 1024 * 1024;
 pub const MIN_RESPONSE_TIMEOUT_MS: u64 = 1_000;

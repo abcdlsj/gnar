@@ -128,12 +128,22 @@ fn parse_edge(value: &str) -> Result<String, String> {
     if url.host_str().is_none_or(str::is_empty) {
         return Err(format!("{value} is missing a host"));
     }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(
+            "edge URLs must not contain credentials; pass enrollment keys via stdin".into(),
+        );
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("edge URLs must not contain a query or fragment".into());
+    }
     Ok(candidate)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_edge;
+    use clap::Parser;
+
+    use super::{Cli, Command, parse_edge};
 
     #[test]
     fn a_bare_host_and_port_becomes_an_http_url() {
@@ -168,12 +178,49 @@ mod tests {
         );
         assert!(parse_edge("").is_err());
     }
+
+    #[test]
+    fn an_edge_url_cannot_carry_credentials() {
+        assert!(parse_edge("https://user:password@gnar.example.com").is_err());
+    }
+
+    #[test]
+    fn enrollment_login_requires_an_account_and_stdin_flag() {
+        let cli = Cli::try_parse_from([
+            "gnar",
+            "login",
+            "--edge",
+            "https://gnar.example.com/base/",
+            "--account",
+            "alice",
+            "--enrollment-key-stdin",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Login(args)) => {
+                assert_eq!(args.account.as_deref(), Some("alice"));
+                assert!(args.enrollment_key_stdin);
+                assert!(cli.json);
+                assert_eq!(cli.edge.as_deref(), Some("https://gnar.example.com/base"));
+            }
+            _ => panic!("expected login command"),
+        }
+    }
+
+    #[test]
+    fn interactive_login_stays_a_plain_login_without_enrollment_flags() {
+        let cli = Cli::try_parse_from(["gnar", "login"]).unwrap();
+        assert!(
+            matches!(cli.command, Some(Command::Login(args)) if args.account.is_none() && !args.enrollment_key_stdin)
+        );
+    }
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Sign in to an edge and store its token
-    Login,
+    Login(LoginArgs),
     /// Forget the stored token for an edge
     Logout,
     /// Show the signed-in account for an edge
@@ -187,6 +234,24 @@ pub enum Command {
     Serve(ServeArgs),
     /// Print version information
     Version,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct LoginArgs {
+    #[arg(
+        long,
+        value_name = "ACCOUNT",
+        requires = "enrollment_key_stdin",
+        help = "Account name to enroll when reading the enrollment key from stdin"
+    )]
+    pub account: Option<String>,
+
+    #[arg(
+        long,
+        requires = "account",
+        help = "Read one enrollment key from stdin instead of opening the device flow"
+    )]
+    pub enrollment_key_stdin: bool,
 }
 
 #[derive(Clone, Debug, Args)]

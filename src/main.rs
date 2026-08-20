@@ -32,7 +32,11 @@ async fn main() -> ExitCode {
 
     let result = match cli.command {
         Some(Command::Serve(args)) => Edge::new(args).run().await,
-        Some(Command::Login) => match account::command_edge(cli.edge.as_deref()) {
+        Some(Command::Login(args)) => match account::command_edge(cli.edge.as_deref()) {
+            Ok(edge) if args.enrollment_key_stdin => {
+                let account = args.account.as_deref().unwrap_or_default();
+                account::enroll(&edge, account, &output).await
+            }
             Ok(edge) => account::login(&edge).await,
             Err(error) => Err(error),
         },

@@ -106,6 +106,18 @@ gnar stores one token for each signed-in edge in the user's configuration direct
 
 Signing in provides reserved endpoint names and higher quotas. Anonymous publishing remains available when the edge operator allows it.
 
+For a Warren Headless setup, bootstrap an account without opening the device page:
+
+```console
+$ gnar login --edge https://gnar.example.com --account owner \
+    --enrollment-key-stdin --json < /path/to/approval-secret
+```
+
+The command consumes the approval/enrollment key once from stdin, emits status as
+newline-delimited JSON, and never prints the key or the issued token. The key is
+bootstrap-only; gnar stores the resulting account token in its per-user
+credentials file. Keep both credentials out of the edge URL.
+
 Use the same edge when managing an account or endpoint explicitly:
 
 ```console
@@ -161,7 +173,7 @@ Start an edge for local use:
 $ gnar serve
 ```
 
-The interactive setup asks whether the edge allows anonymous publishing or requires accounts. Account mode uses an approval secret for the device verification page and requires every tunnel owner to sign in. Public tunnel URLs remain accessible without signing in.
+The interactive setup asks whether the edge allows anonymous publishing or requires accounts. Account mode uses one approval/enrollment secret for the device verification page and headless enrollment, and requires every tunnel owner to sign in. Public tunnel URLs remain accessible without signing in.
 
 For a non-interactive account-enabled deployment, provide the secret explicitly:
 

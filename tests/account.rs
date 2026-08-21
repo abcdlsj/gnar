@@ -489,6 +489,42 @@ async fn manual_enrollment_reports_the_suffixed_account() {
     edge.cleanup();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn edge_refuses_to_start_with_an_insecure_keys_file() {
+    let port = free_port();
+    let url = format!("http://127.0.0.1:{port}");
+    let database = temp_path("db");
+    let config_dir = temp_path("config");
+    let keys_path = temp_path("keys");
+    std::fs::write(&keys_path, "{}").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gnar"))
+        .args([
+            "serve",
+            "--listen",
+            &format!("127.0.0.1:{port}"),
+            "--public-url",
+            &url,
+            "--database",
+            database.to_str().unwrap(),
+            "--keys-file",
+            keys_path.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("chmod 600"), "{stderr}");
+
+    let _ = std::fs::remove_file(database);
+    let _ = std::fs::remove_file(keys_path);
+    let _ = std::fs::remove_dir_all(config_dir);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn approval_requires_the_secret() {
     let edge = start_edge(&[]).await;

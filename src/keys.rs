@@ -294,6 +294,7 @@ fn read_secret_line() -> Result<String, AppError> {
     }
     let secret = input.strip_suffix('\n').unwrap_or(&input);
     let secret = secret.strip_suffix('\r').unwrap_or(secret);
+    let secret = secret.trim();
     if secret.is_empty() {
         return Err(AppError::Key(
             "the secret stdin must contain one non-empty line".into(),

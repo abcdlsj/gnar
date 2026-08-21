@@ -169,10 +169,13 @@ impl Output {
                     "Key {name} -> account {account}, max {max_uses} uses, expires {expires}"
                 )?;
                 match secret {
-                    Some(secret) => writeln!(
-                        writer,
-                        "Share: gnar login --edge <EDGE_URL> --key-stdin <<< '{secret}'"
-                    ),
+                    Some(secret) => {
+                        writeln!(writer, "Secret: {secret}")?;
+                        writeln!(
+                            writer,
+                            "Share securely: gnar login --edge <EDGE_URL> --key-stdin < secret.txt"
+                        )
+                    }
                     None => writeln!(
                         writer,
                         "Secret stored in the keys file; run `gnar key show {name}` to display it"

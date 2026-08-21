@@ -331,6 +331,7 @@ fn read_enrollment_key_from(reader: &mut impl BufRead) -> Result<String, AppErro
     }
     let key = input.strip_suffix('\n').unwrap_or(&input);
     let key = key.strip_suffix('\r').unwrap_or(key);
+    let key = key.trim();
     if key.is_empty() {
         return Err(AppError::Edge(
             "secret stdin must contain one non-empty line".into(),
@@ -572,7 +573,7 @@ mod tests {
 
     #[test]
     fn enrollment_key_is_read_once_and_accepts_one_trailing_newline() {
-        let mut reader = Cursor::new("let-me-in\nunused\n");
+        let mut reader = Cursor::new("  let-me-in  \nunused\n");
         assert_eq!(read_enrollment_key_from(&mut reader).unwrap(), "let-me-in");
         let mut remaining = String::new();
         reader.read_line(&mut remaining).unwrap();

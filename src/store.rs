@@ -848,11 +848,43 @@ fn create_account_token(
 fn sync_invite_keys(connection: &Connection, keys: &[InviteKeyRecord]) -> rusqlite::Result<()> {
     let transaction = connection.unchecked_transaction()?;
     for key in keys {
-        transaction.execute(
-            "DELETE FROM invite_keys
-             WHERE secret_hash = ?1 AND name != ?2",
-            params![key.secret_hash, key.name],
-        )?;
+        let old: Option<(i64, i64)> = transaction
+            .query_row(
+                "SELECT id, used_count FROM invite_keys
+                 WHERE secret_hash = ?1 AND name != ?2",
+                params![key.secret_hash, key.name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((old_id, used_count)) = old {
+            let existing: Option<i64> = transaction
+                .query_row(
+                    "SELECT id FROM invite_keys WHERE name = ?1 AND id != ?2",
+                    params![key.name, old_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match existing {
+                Some(existing_id) => {
+                    transaction.execute(
+                        "UPDATE invite_keys
+                         SET used_count = used_count + ?2, updated_at = unixepoch()
+                         WHERE id = ?1",
+                        params![existing_id, used_count],
+                    )?;
+                    transaction.execute("DELETE FROM invite_keys WHERE id = ?1", [old_id])?;
+                }
+                None => {
+                    transaction.execute(
+                        "UPDATE invite_keys
+                         SET name = ?1, account = ?2, max_uses = ?3, expires_at = ?4,
+                             active = 1, updated_at = unixepoch()
+                         WHERE id = ?5",
+                        params![key.name, key.account, key.max_uses, key.expires_at, old_id],
+                    )?;
+                }
+            }
+        }
         transaction.execute(
             "INSERT INTO invite_keys(
                  name, secret_hash, max_uses, expires_at, account,
@@ -1259,6 +1291,12 @@ mod tests {
             }])
             .await
             .unwrap();
+        assert!(
+            store
+                .consume_invite_key("moved-secret-123".into(), "token-before-move".into())
+                .await
+                .is_ok()
+        );
 
         store
             .sync_invite_keys(vec![InviteKeyRecord {
@@ -1273,9 +1311,9 @@ mod tests {
 
         assert!(matches!(
             store
-                .consume_invite_key("moved-secret-123".into(), "token-moved".into())
+                .consume_invite_key("moved-secret-123".into(), "token-after-move".into())
                 .await,
-            Ok(account) if account.starts_with("new-name")
+            Err(InviteKeyError::Exhausted)
         ));
 
         let _ = std::fs::remove_file(&path);

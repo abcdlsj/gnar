@@ -174,9 +174,12 @@ including device approval, enrollment, and invite keys, so the second user of
 Hand the secret to a user and they register with one command:
 
 ```console
-$ echo 'AB12-CD34-EF56' | gnar login --edge https://gnar.example.com --key-stdin
+$ gnar login --edge https://gnar.example.com --key-stdin < secret.txt
 ✓ Signed in as demo-x7k2
 ```
+
+Keep the secret out of shell history and logs; write it to a private file or
+pipe it from a secret manager instead of putting it on the command line.
 
 Removing a key from the file stops new signups immediately. Existing account
 tokens stay valid; the key file is written with owner-only permissions, and

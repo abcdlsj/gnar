@@ -173,19 +173,27 @@ impl Edge {
             .map_err(AppError::Edge)?;
         let keys_store = store.clone();
         let keys_path = config.keys_file.clone();
-        match crate::keys::InviteKeysFile::load(&keys_path) {
-            Ok(keys) => {
-                if let Err(error) = keys_store.sync_invite_keys(keys.records()).await {
-                    tracing::error!(%error, "could not sync invite keys at startup");
-                }
-                println!(
-                    "  keys     {} configured in {}",
-                    keys.keys.len(),
+        let keys = crate::keys::InviteKeysFile::load(&keys_path).map_err(|error| {
+            AppError::Edge(format!(
+                "could not load invite keys from {}: {error}; \
+                 fix the file or remove it to start the edge",
+                keys_path.display()
+            ))
+        })?;
+        keys_store
+            .sync_invite_keys(keys.records())
+            .await
+            .map_err(|error| {
+                AppError::Edge(format!(
+                    "could not sync invite keys from {}: {error}",
                     keys_path.display()
-                );
-            }
-            Err(error) => tracing::warn!(%error, "could not load invite keys"),
-        }
+                ))
+            })?;
+        println!(
+            "  keys     {} configured in {}",
+            keys.keys.len(),
+            keys_path.display()
+        );
         let state = EdgeState {
             public_url: config.public_url.trim_end_matches('/').to_string(),
             base_path: base_path.clone(),
@@ -356,23 +364,38 @@ async fn cleanup_loop(store: Store) {
 
 async fn reload_invite_keys(path: PathBuf, store: Store) {
     let mut last_modified: Option<SystemTime> = None;
-    let mut first = true;
+    let mut last_succeeded = false;
+    let mut delay = Duration::from_secs(1);
     loop {
         let modified = fs::metadata(&path)
             .and_then(|metadata| metadata.modified())
             .ok();
-        if first || modified != last_modified {
-            first = false;
-            last_modified = modified;
+        if modified != last_modified {
+            delay = Duration::from_secs(1);
+        }
+        if !last_succeeded || modified != last_modified {
             match crate::keys::InviteKeysFile::load(&path) {
                 Ok(keys) => match store.sync_invite_keys(keys.records()).await {
-                    Ok(()) => tracing::debug!("reloaded invite keys from {}", path.display()),
-                    Err(error) => tracing::error!(%error, "could not sync invite keys"),
+                    Ok(()) => {
+                        last_modified = modified;
+                        last_succeeded = true;
+                        delay = Duration::from_secs(1);
+                        tracing::debug!("reloaded invite keys from {}", path.display());
+                    }
+                    Err(error) => {
+                        last_succeeded = false;
+                        delay = (delay * 2).min(Duration::from_secs(30));
+                        tracing::error!(%error, "could not sync invite keys");
+                    }
                 },
-                Err(error) => tracing::warn!(%error, "ignoring invalid invite key file"),
+                Err(error) => {
+                    last_succeeded = false;
+                    delay = (delay * 2).min(Duration::from_secs(30));
+                    tracing::warn!(%error, "ignoring invalid invite key file");
+                }
             }
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(delay).await;
     }
 }
 

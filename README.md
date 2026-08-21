@@ -70,6 +70,10 @@ gnar login                    sign in to an edge and store its token
 gnar logout                   forget the stored token for an edge
 gnar whoami                   show the signed-in account for an edge
 gnar release <name>           release a reserved endpoint name
+gnar key add <name>           create or update an invite key
+gnar key list                 list configured invite keys
+gnar key revoke <name>        remove an invite key
+gnar key show <name>          display an invite key's secret
 gnar serve                    run a self-hosted edge
 gnar version                  print version information
 ```
@@ -125,6 +129,63 @@ $ gnar whoami --edge https://gnar.example.com
 $ gnar logout --edge https://gnar.example.com
 $ gnar release checkout --edge https://gnar.example.com
 ```
+
+## Invite keys
+
+Invite keys let an edge operator hand out a shared secret that anyone can use
+to create an account without opening the device page. The edge watches
+`keys.json` in the working directory by default (`--keys-file` or
+`GNAR_KEYS_FILE` to change) and reloads it within about a second, so adding,
+editing, or removing keys does not restart the edge.
+
+Create a key:
+
+```console
+$ gnar key add demo --max-uses 3 --expires-in 7d
+Key demo -> account demo, max 3 uses, expires 1780000000
+Secret stored in the keys file; run `gnar key show demo` to display it
+```
+
+The secret is not printed by default so it stays out of terminal scrollback
+and logs. Pass `--show-secret` to print it once during creation, or use
+`gnar key show demo` later.
+
+The underlying file looks like this:
+
+```json
+{
+  "keys": {
+    "demo": {
+      "secret": "AB12-CD34-EF56",
+      "max_uses": 3,
+      "expires_at": 1780000000,
+      "account": "demo"
+    }
+  }
+}
+```
+
+`account` defaults to the key name, `max_uses` defaults to 1, and
+`expires_at` is an optional Unix timestamp. Invite key names and account names
+are limited to 16 characters. When an account name is already taken, gnar
+appends a random 4-character suffix for every registration path, including
+device approval, enrollment, and invite keys, so the second user of `demo`
+signs in as something like `demo-x7k2`.
+
+Hand the secret to a user and they register with one command:
+
+```console
+$ gnar login --edge https://gnar.example.com --key-stdin < secret.txt
+✓ Signed in as demo-x7k2
+```
+
+Keep the secret out of shell history and logs; write it to a private file or
+pipe it from a secret manager instead of putting it on the command line.
+
+Removing a key from the file stops new signups immediately. Existing account
+tokens stay valid; the key file is written with owner-only permissions, and
+the edge refuses to load a key file that is readable or writable by group or
+others. The edge stores only a hash of each key.
 
 ## Request inspector
 
@@ -194,6 +255,11 @@ $ GNAR_APPROVAL_SECRET='replace-this-secret' \
     --public-url https://gnar.example.com \
     --database gnar.db
 ```
+
+The same deployment can accept invite keys by adding entries to `keys.json`;
+the edge picks them up without a restart. Use `--keys-file` to point at a
+different path and `--anonymous-only` to disable both approval and invite
+enrollment.
 
 ### Run with Docker
 

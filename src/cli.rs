@@ -143,8 +143,9 @@ fn parse_edge(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+    use std::path::PathBuf;
 
-    use super::{Cli, Command, parse_edge};
+    use super::{Cli, Command, KeyAction, parse_edge};
 
     #[test]
     fn a_bare_host_and_port_becomes_an_http_url() {
@@ -216,6 +217,62 @@ mod tests {
             matches!(cli.command, Some(Command::Login(args)) if args.account.is_none() && !args.enrollment_key_stdin)
         );
     }
+
+    #[test]
+    fn invite_login_reads_the_key_from_stdin() {
+        let cli = Cli::try_parse_from([
+            "gnar",
+            "login",
+            "--edge",
+            "https://gnar.example.com",
+            "--account",
+            "alice",
+            "--key-stdin",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Login(args)) => {
+                assert!(args.key_stdin);
+                assert_eq!(args.account.as_deref(), Some("alice"));
+                assert!(!args.enrollment_key_stdin);
+            }
+            _ => panic!("expected login command"),
+        }
+    }
+
+    #[test]
+    fn key_commands_share_a_default_file() {
+        let cli = Cli::try_parse_from([
+            "gnar",
+            "key",
+            "add",
+            "demo",
+            "--max-uses",
+            "3",
+            "--expires-in",
+            "7d",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Key(args)) => {
+                assert_eq!(args.file, PathBuf::from("keys.json"));
+                match args.action {
+                    KeyAction::Add {
+                        name,
+                        max_uses,
+                        expires_in,
+                        ..
+                    } => {
+                        assert_eq!(name, "demo");
+                        assert_eq!(max_uses, Some(3));
+                        assert_eq!(expires_in.as_deref(), Some("7d"));
+                    }
+                    _ => panic!("expected add action"),
+                }
+            }
+            _ => panic!("expected key command"),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -231,6 +288,8 @@ pub enum Command {
         #[arg(value_name = "NAME")]
         name: String,
     },
+    /// Manage invite keys in the edge keys file
+    Key(KeyArgs),
     /// Run a self-hosted edge
     Serve(ServeArgs),
     /// Print version information
@@ -242,8 +301,7 @@ pub struct LoginArgs {
     #[arg(
         long,
         value_name = "ACCOUNT",
-        requires = "enrollment_key_stdin",
-        help = "Account name to enroll when reading the enrollment key from stdin"
+        help = "Account name for --enrollment-key-stdin or --key-stdin"
     )]
     pub account: Option<String>,
 
@@ -253,6 +311,69 @@ pub struct LoginArgs {
         help = "Read one enrollment key from stdin instead of opening the device flow"
     )]
     pub enrollment_key_stdin: bool,
+
+    #[arg(
+        long,
+        value_name = "KEY",
+        conflicts_with = "enrollment_key_stdin",
+        help = "Enroll with an invite key read from stdin instead of the device flow"
+    )]
+    pub key_stdin: bool,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct KeyArgs {
+    #[arg(
+        long,
+        global = true,
+        env = "GNAR_KEYS_FILE",
+        default_value = "keys.json",
+        help = "Invite key configuration file"
+    )]
+    pub file: PathBuf,
+
+    #[command(subcommand)]
+    pub action: KeyAction,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum KeyAction {
+    /// Create or update an invite key
+    Add {
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        #[arg(long, value_name = "N")]
+        max_uses: Option<u32>,
+
+        #[arg(
+            long,
+            value_name = "DURATION",
+            help = "Lifetime such as 7d, 24h, or 30m"
+        )]
+        expires_in: Option<String>,
+
+        #[arg(long)]
+        account: Option<String>,
+
+        #[arg(long, help = "Read the secret from stdin instead of generating one")]
+        secret_stdin: bool,
+
+        #[arg(long, help = "Print the secret once after creating or updating")]
+        show_secret: bool,
+    },
+    /// List configured invite keys
+    List,
+    /// Remove an invite key
+    Revoke {
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Show an invite key's secret
+    Show {
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug, Args)]
@@ -281,6 +402,14 @@ pub struct ServeArgs {
         help = "Secret required to approve a device code and create an account"
     )]
     pub approval_secret: Option<String>,
+
+    #[arg(
+        long,
+        env = "GNAR_KEYS_FILE",
+        default_value = "keys.json",
+        help = "Invite key configuration file, reloaded when it changes"
+    )]
+    pub keys_file: PathBuf,
 
     #[arg(
         long,

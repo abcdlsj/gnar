@@ -142,7 +142,7 @@ async fn request_crosses_edge_and_is_recorded() {
     );
     assert_eq!(
         count_now(&database, "SELECT count(*) FROM schema_migrations"),
-        3
+        4
     );
 
     tunnel.0.kill().unwrap();

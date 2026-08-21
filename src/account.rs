@@ -123,7 +123,7 @@ pub async fn login(edge: &str) -> Result<(), AppError> {
 pub async fn enroll(edge: &str, account: &str, output: &Output) -> Result<(), AppError> {
     let account = normalize_account(account)?;
     output.event(Event::EnrollmentStarted { account: &account })?;
-    let enrollment_key = read_enrollment_key()?;
+    let enrollment_key = read_secret_line()?;
     let client = Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -146,14 +146,67 @@ pub async fn enroll(edge: &str, account: &str, output: &Output) -> Result<(), Ap
     let reply: EnrollmentResponse = response.json().await.map_err(|_| {
         AppError::Edge("edge sent an unexpected enrollment reply; try again".into())
     })?;
-    if reply.status != "enrolled" || reply.token.is_empty() || reply.account != account {
+    if reply.status != "enrolled" || reply.token.is_empty() || reply.account.is_empty() {
         return Err(AppError::Edge(
             "edge sent an incomplete enrollment reply; try again".into(),
         ));
     }
     store_token(edge, &reply.token)?;
-    output.event(Event::EnrollmentSucceeded { account: &account })?;
+    output.event(Event::EnrollmentSucceeded {
+        account: &reply.account,
+    })?;
     Ok(())
+}
+
+pub async fn enroll_with_invite(
+    edge: &str,
+    invite_key: &str,
+    account: Option<&str>,
+    output: &Output,
+) -> Result<(), AppError> {
+    let account = account.map(normalize_account).transpose()?;
+    output.event(Event::InviteEnrollmentStarted)?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| AppError::Edge(error.to_string()))?;
+    let endpoint = edge_endpoint(edge, "/v1/device/enroll")?;
+    let response = client
+        .post(endpoint)
+        .json(&InviteRequest {
+            invite_key,
+            account: account.as_deref(),
+        })
+        .send()
+        .await
+        .map_err(|error| unreachable_edge(edge, &error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(enrollment_error(status, response).await);
+    }
+
+    let reply: EnrollmentResponse = response.json().await.map_err(|_| {
+        AppError::Edge("edge sent an unexpected enrollment reply; try again".into())
+    })?;
+    if reply.status != "enrolled" || reply.token.is_empty() || reply.account.is_empty() {
+        return Err(AppError::Edge(
+            "edge sent an incomplete enrollment reply; try again".into(),
+        ));
+    }
+    store_token(edge, &reply.token)?;
+    output.event(Event::EnrollmentSucceeded {
+        account: &reply.account,
+    })?;
+    Ok(())
+}
+
+pub async fn enroll_with_invite_stdin(
+    edge: &str,
+    account: Option<&str>,
+    output: &Output,
+) -> Result<(), AppError> {
+    let invite_key = read_secret_line()?;
+    enroll_with_invite(edge, &invite_key, account, output).await
 }
 
 pub async fn release(edge: &str, name: &str) -> Result<(), AppError> {
@@ -258,16 +311,16 @@ fn edge_endpoint(edge: &str, suffix: &str) -> Result<String, AppError> {
 
 fn normalize_account(account: &str) -> Result<String, AppError> {
     let normalized = account.trim().to_ascii_lowercase();
-    if crate::protocol::valid_name(&normalized) {
+    if crate::protocol::valid_account_name(&normalized) {
         return Ok(normalized);
     }
     Err(AppError::Edge(format!(
         "--account must be 1 to {} lowercase letters, numbers, or hyphens",
-        crate::protocol::MAX_NAME_LENGTH
+        crate::protocol::MAX_ACCOUNT_NAME_LENGTH
     )))
 }
 
-fn read_enrollment_key() -> Result<String, AppError> {
+fn read_secret_line() -> Result<String, AppError> {
     let mut stdin = io::stdin().lock();
     read_enrollment_key_from(&mut stdin)
 }
@@ -287,9 +340,10 @@ fn read_enrollment_key_from(reader: &mut impl BufRead) -> Result<String, AppErro
     }
     let key = input.strip_suffix('\n').unwrap_or(&input);
     let key = key.strip_suffix('\r').unwrap_or(key);
+    let key = key.trim();
     if key.is_empty() {
         return Err(AppError::Edge(
-            "enrollment key stdin must contain one non-empty line".into(),
+            "secret stdin must contain one non-empty line".into(),
         ));
     }
     Ok(key.to_string())
@@ -299,6 +353,12 @@ fn read_enrollment_key_from(reader: &mut impl BufRead) -> Result<String, AppErro
 struct EnrollmentRequest<'a> {
     account: &'a str,
     enrollment_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct InviteRequest<'a> {
+    invite_key: &'a str,
+    account: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -320,13 +380,22 @@ async fn enrollment_error(status: reqwest::StatusCode, response: reqwest::Respon
         .and_then(|error| error.code);
     let reason = match (status, code.as_deref()) {
         (reqwest::StatusCode::NOT_FOUND, Some("enrollment_disabled")) => {
-            "enrollment is disabled on this edge; ask its operator to configure an approval secret"
+            "enrollment is disabled on this edge; ask its operator to enable accounts"
         }
         (reqwest::StatusCode::FORBIDDEN, Some("invalid_enrollment_key")) => {
             "the enrollment key was rejected; check the operator-provided key and try again"
         }
+        (reqwest::StatusCode::FORBIDDEN, Some("invalid_invite_key")) => {
+            "the invite key was not recognized; check the key and try again"
+        }
+        (reqwest::StatusCode::FORBIDDEN, Some("invite_key_expired")) => {
+            "the invite key has expired; ask the edge operator for a new key"
+        }
+        (reqwest::StatusCode::FORBIDDEN, Some("invite_key_exhausted")) => {
+            "the invite key has reached its usage limit; ask the edge operator for a new key"
+        }
         (reqwest::StatusCode::BAD_REQUEST, Some("malformed_account")) => {
-            "the account name is invalid; use 1 to 48 lowercase letters, numbers, or hyphens"
+            "the account name is invalid; use 1 to 16 lowercase letters, numbers, or hyphens"
         }
         (reqwest::StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")) => {
             "too many enrollment attempts; wait and try again"
@@ -514,7 +583,7 @@ mod tests {
 
     #[test]
     fn enrollment_key_is_read_once_and_accepts_one_trailing_newline() {
-        let mut reader = Cursor::new("let-me-in\nunused\n");
+        let mut reader = Cursor::new("  let-me-in  \nunused\n");
         assert_eq!(read_enrollment_key_from(&mut reader).unwrap(), "let-me-in");
         let mut remaining = String::new();
         reader.read_line(&mut remaining).unwrap();

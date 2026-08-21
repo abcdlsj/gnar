@@ -3,7 +3,7 @@ use std::net::TcpListener as StdTcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::extract::Request;
@@ -325,6 +325,248 @@ async fn enrollment_cli_errors_are_json_and_do_not_echo_the_key() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invite_keys_register_accounts_with_collision_suffix_and_limits() {
+    let keys_path = temp_path("keys");
+    write_keys(
+        &keys_path,
+        r#"{"keys":{"demo":{"secret":"DEMO-SECRET-1234","max_uses":2,"account":"demo"}}}"#,
+    );
+    let edge = start_edge(&["--keys-file", keys_path.to_str().unwrap()]).await;
+    let client = reqwest::Client::new();
+    let demo_token = mint_account(&client, &edge, "demo").await;
+    assert!(!demo_token.is_empty());
+    wait_for_invite_key_sync(&edge, 1).await;
+
+    let (status, first) = enroll_with_key(&client, &edge, "DEMO-SECRET-1234").await;
+    assert_eq!(status, 200);
+    let first_account = first["account"].as_str().unwrap().to_string();
+    assert!(first_account.starts_with("demo-"));
+    assert_ne!(first_account, "demo");
+
+    let (status, second) = enroll_with_key(&client, &edge, "DEMO-SECRET-1234").await;
+    assert_eq!(status, 200);
+    assert_ne!(second["account"].as_str().unwrap(), first_account.as_str());
+
+    let (status, third) = enroll_with_key(&client, &edge, "DEMO-SECRET-1234").await;
+    assert_eq!(status, 403);
+    assert_eq!(third["code"], "invite_key_exhausted");
+
+    let connection = rusqlite::Connection::open(&edge.database).unwrap();
+    let used: i64 = connection
+        .query_row(
+            "SELECT used_count FROM invite_keys WHERE name = 'demo'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(used, 2);
+    drop(connection);
+    edge.cleanup();
+    let _ = std::fs::remove_file(keys_path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invite_key_honors_a_user_supplied_account() {
+    let keys_path = temp_path("keys");
+    write_keys(
+        &keys_path,
+        r#"{"keys":{"demo":{"secret":"USER-ACCOUNT-SECRET","max_uses":1,"account":"demo"}}}"#,
+    );
+    let edge = start_edge(&["--keys-file", keys_path.to_str().unwrap()]).await;
+    wait_for_invite_key_sync(&edge, 1).await;
+    let client = reqwest::Client::new();
+
+    let (status, body) =
+        enroll_with_key_account(&client, &edge, "USER-ACCOUNT-SECRET", Some("alice")).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["account"], "alice");
+
+    edge.cleanup();
+    let _ = std::fs::remove_file(keys_path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invite_keys_reload_without_restart() {
+    let keys_path = temp_path("keys");
+    let edge = start_edge(&["--keys-file", keys_path.to_str().unwrap()]).await;
+    let client = reqwest::Client::new();
+
+    let (status, body) = enroll_with_key(&client, &edge, "LIVE-SECRET-1234").await;
+    assert_eq!(status, 403);
+    assert_eq!(body["code"], "invalid_invite_key");
+
+    write_keys(
+        &keys_path,
+        r#"{"keys":{"live":{"secret":"LIVE-SECRET-1234","max_uses":1,"account":"live"}}}"#,
+    );
+    wait_for_invite_key_sync(&edge, 1).await;
+    let (status, body) = enroll_with_key(&client, &edge, "LIVE-SECRET-1234").await;
+    assert_eq!(status, 200);
+    assert_eq!(body["account"], "live");
+
+    write_keys(&keys_path, "{}");
+    wait_for_invite_key_sync(&edge, 0).await;
+    let (status, body) = enroll_with_key(&client, &edge, "LIVE-SECRET-1234").await;
+    assert_eq!(status, 403);
+    assert_eq!(body["code"], "invalid_invite_key");
+
+    edge.cleanup();
+    let _ = std::fs::remove_file(keys_path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invite_login_cli_emits_json_without_the_secret() {
+    let keys_path = temp_path("keys");
+    write_keys(
+        &keys_path,
+        r#"{"keys":{"cli":{"secret":"CLI-SECRET-1234","max_uses":1,"account":"cli-user"}}}"#,
+    );
+    let edge = start_edge(&["--keys-file", keys_path.to_str().unwrap()]).await;
+    wait_for_invite_key_sync(&edge, 1).await;
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gnar"));
+    command
+        .args([
+            "login",
+            "--edge",
+            &edge.url,
+            "--account",
+            "alice",
+            "--key-stdin",
+            "--json",
+        ])
+        .env("GNAR_CONFIG_DIR", &edge.config_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"CLI-SECRET-1234\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("CLI-SECRET-1234"));
+    assert!(!stderr.contains("CLI-SECRET-1234"));
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events[0]["type"], "invite_enrollment_started");
+    assert_eq!(events[1]["type"], "enrollment_succeeded");
+    assert_eq!(events[1]["account"], "alice");
+
+    let credentials: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(edge.config_dir.join("credentials.json")).unwrap(),
+    )
+    .unwrap();
+    let token = credentials["edges"][&edge.url].as_str().unwrap();
+    assert!(!token.is_empty());
+    assert!(!stdout.contains(token));
+    assert!(!stderr.contains(token));
+
+    edge.cleanup();
+    let _ = std::fs::remove_file(keys_path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn expired_invite_keys_are_rejected() {
+    let keys_path = temp_path("keys");
+    let expires_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        - 1;
+    write_keys(
+        &keys_path,
+        &format!(
+            r#"{{"keys":{{"demo":{{"secret":"EXPIRED-SECRET-1234","max_uses":1,"expires_at":{expires_at},"account":"demo"}}}}}}"#
+        ),
+    );
+    let edge = start_edge(&["--keys-file", keys_path.to_str().unwrap()]).await;
+    wait_for_invite_key_sync(&edge, 1).await;
+
+    let client = reqwest::Client::new();
+    let (status, body) = enroll_with_key(&client, &edge, "EXPIRED-SECRET-1234").await;
+    assert_eq!(status, 403);
+    assert_eq!(body["code"], "invite_key_expired");
+
+    edge.cleanup();
+    let _ = std::fs::remove_file(keys_path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn manual_enrollment_reports_the_suffixed_account() {
+    let edge = start_edge(&[]).await;
+    let client = reqwest::Client::new();
+
+    let (status, first) = enroll_legacy(&client, &edge, "alice", APPROVAL_SECRET).await;
+    assert_eq!(status, 200);
+    assert_eq!(first["account"], "alice");
+
+    let (status, second) = enroll_legacy(&client, &edge, "alice", APPROVAL_SECRET).await;
+    assert_eq!(status, 200);
+    let second_account = second["account"].as_str().unwrap().to_string();
+    assert_ne!(second_account, "alice");
+    assert!(second_account.starts_with("alice-"));
+
+    edge.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn account_names_longer_than_sixteen_are_rejected() {
+    let edge = start_edge(&[]).await;
+    let client = reqwest::Client::new();
+
+    let (status, body) = enroll_legacy(&client, &edge, &"a".repeat(17), APPROVAL_SECRET).await;
+
+    assert_eq!(status, 400);
+    assert_eq!(body["code"], "malformed_account");
+    edge.cleanup();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn edge_refuses_to_start_with_an_insecure_keys_file() {
+    let port = free_port();
+    let url = format!("http://127.0.0.1:{port}");
+    let database = temp_path("db");
+    let config_dir = temp_path("config");
+    let keys_path = temp_path("keys");
+    std::fs::write(&keys_path, "{}").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gnar"))
+        .args([
+            "serve",
+            "--listen",
+            &format!("127.0.0.1:{port}"),
+            "--public-url",
+            &url,
+            "--database",
+            database.to_str().unwrap(),
+            "--keys-file",
+            keys_path.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("chmod 600"), "{stderr}");
+
+    let _ = std::fs::remove_file(database);
+    let _ = std::fs::remove_file(keys_path);
+    let _ = std::fs::remove_dir_all(config_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn approval_requires_the_secret() {
     let edge = start_edge(&[]).await;
     let client = reqwest::Client::new();
@@ -601,6 +843,85 @@ async fn mint_account(client: &reqwest::Client, edge: &Edge, name: &str) -> Stri
         .as_str()
         .unwrap()
         .to_string()
+}
+
+async fn enroll_with_key(
+    client: &reqwest::Client,
+    edge: &Edge,
+    key: &str,
+) -> (u16, serde_json::Value) {
+    enroll_with_key_account(client, edge, key, None).await
+}
+
+async fn enroll_with_key_account(
+    client: &reqwest::Client,
+    edge: &Edge,
+    key: &str,
+    account: Option<&str>,
+) -> (u16, serde_json::Value) {
+    let body = match account {
+        Some(account) => serde_json::json!({ "invite_key": key, "account": account }),
+        None => serde_json::json!({ "invite_key": key }),
+    };
+    let response = client
+        .post(format!("{}/v1/device/enroll", edge.url))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let body = response.json().await.unwrap();
+    (status, body)
+}
+
+async fn enroll_legacy(
+    client: &reqwest::Client,
+    edge: &Edge,
+    account: &str,
+    enrollment_key: &str,
+) -> (u16, serde_json::Value) {
+    let response = client
+        .post(format!("{}/v1/device/enroll", edge.url))
+        .json(&serde_json::json!({
+            "account": account,
+            "enrollment_key": enrollment_key,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let body = response.json().await.unwrap();
+    (status, body)
+}
+
+async fn wait_for_invite_key_sync(edge: &Edge, active: usize) {
+    for _ in 0..120 {
+        if let Ok(connection) = rusqlite::Connection::open(&edge.database) {
+            let count: usize = connection
+                .query_row(
+                    "SELECT count(*) FROM invite_keys WHERE active = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            drop(connection);
+            if count == active {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("invite keys did not reach active={active}");
+}
+
+fn write_keys(path: &PathBuf, content: &str) {
+    std::fs::write(path, content).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 }
 
 async fn release(client: &reqwest::Client, edge: &Edge, name: &str, token: &str) -> u16 {

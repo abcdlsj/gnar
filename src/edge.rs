@@ -1153,7 +1153,8 @@ async fn enroll_device(
         );
     }
     if let Some(invite_key) = body.get("invite_key").and_then(|value| value.as_str()) {
-        return enroll_with_invite(state, invite_key).await;
+        let account = body.get("account").and_then(|value| value.as_str());
+        return enroll_with_invite(state, invite_key, account).await;
     }
     let Some(expected) = &state.config.approval_secret else {
         return enrollment_json_error(
@@ -1182,14 +1183,14 @@ async fn enroll_device(
         return enrollment_json_error(
             StatusCode::BAD_REQUEST,
             "malformed_account",
-            "account must be 1 to 48 lowercase letters, numbers, or hyphens",
+            "account must be 1 to 16 lowercase letters, numbers, or hyphens",
         );
     };
     let Some(account) = normalize_account_name(account) else {
         return enrollment_json_error(
             StatusCode::BAD_REQUEST,
             "malformed_account",
-            "account must be 1 to 48 lowercase letters, numbers, or hyphens",
+            "account must be 1 to 16 lowercase letters, numbers, or hyphens",
         );
     };
 
@@ -1213,7 +1214,7 @@ async fn enroll_device(
     .into_response()
 }
 
-async fn enroll_with_invite(state: EdgeState, invite_key: &str) -> Response {
+async fn enroll_with_invite(state: EdgeState, invite_key: &str, account: Option<&str>) -> Response {
     if invite_key.is_empty() {
         return enrollment_json_error(
             StatusCode::FORBIDDEN,
@@ -1221,10 +1222,23 @@ async fn enroll_with_invite(state: EdgeState, invite_key: &str) -> Response {
             "the invite key was not recognized",
         );
     }
+    let account = match account {
+        Some(account) => match normalize_account_name(account) {
+            Some(account) => Some(account),
+            None => {
+                return enrollment_json_error(
+                    StatusCode::BAD_REQUEST,
+                    "malformed_account",
+                    "account must be 1 to 16 lowercase letters, numbers, or hyphens",
+                );
+            }
+        },
+        None => None,
+    };
     let token = format!("gnar_{}", random_secret());
     match state
         .store
-        .consume_invite_key(invite_key.to_string(), token.clone())
+        .consume_invite_key(invite_key.to_string(), token.clone(), account)
         .await
     {
         Ok(account) => Json(serde_json::json!({
@@ -1334,7 +1348,7 @@ async fn approve_device_page(
     let Some(account) = normalize_account_name(&form.account) else {
         return device_html(
             StatusCode::BAD_REQUEST,
-            "<h1>Not approved</h1><p>Use 1 to 48 lowercase letters, numbers, or hyphens \
+            "<h1>Not approved</h1><p>Use 1 to 16 lowercase letters, numbers, or hyphens \
              for the account name.</p>",
         );
     };
@@ -2019,7 +2033,7 @@ fn valid_name(name: &str) -> bool {
 
 fn normalize_account_name(name: &str) -> Option<String> {
     let normalized = name.trim().to_ascii_lowercase();
-    protocol::valid_name(&normalized).then_some(normalized)
+    protocol::valid_account_name(&normalized).then_some(normalized)
 }
 
 #[cfg(test)]

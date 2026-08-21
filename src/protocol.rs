@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const VERSION: u16 = 2;
 pub const MAX_NAME_LENGTH: usize = 48;
+pub const MAX_ACCOUNT_NAME_LENGTH: usize = 16;
 
 pub const WS_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const WS_MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -25,6 +26,10 @@ pub fn valid_name(name: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+pub fn valid_account_name(name: &str) -> bool {
+    valid_name(name) && name.len() <= MAX_ACCOUNT_NAME_LENGTH
 }
 
 pub const MIN_MAX_REQUEST_BYTES: u64 = 1024 * 1024;

@@ -366,6 +366,27 @@ async fn invite_keys_register_accounts_with_collision_suffix_and_limits() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invite_key_honors_a_user_supplied_account() {
+    let keys_path = temp_path("keys");
+    write_keys(
+        &keys_path,
+        r#"{"keys":{"demo":{"secret":"USER-ACCOUNT-SECRET","max_uses":1,"account":"demo"}}}"#,
+    );
+    let edge = start_edge(&["--keys-file", keys_path.to_str().unwrap()]).await;
+    wait_for_invite_key_sync(&edge, 1).await;
+    let client = reqwest::Client::new();
+
+    let (status, body) =
+        enroll_with_key_account(&client, &edge, "USER-ACCOUNT-SECRET", Some("alice")).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["account"], "alice");
+
+    edge.cleanup();
+    let _ = std::fs::remove_file(keys_path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invite_keys_reload_without_restart() {
     let keys_path = temp_path("keys");
     let edge = start_edge(&["--keys-file", keys_path.to_str().unwrap()]).await;
@@ -406,7 +427,15 @@ async fn invite_login_cli_emits_json_without_the_secret() {
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_gnar"));
     command
-        .args(["login", "--edge", &edge.url, "--key-stdin", "--json"])
+        .args([
+            "login",
+            "--edge",
+            &edge.url,
+            "--account",
+            "alice",
+            "--key-stdin",
+            "--json",
+        ])
         .env("GNAR_CONFIG_DIR", &edge.config_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -430,7 +459,7 @@ async fn invite_login_cli_emits_json_without_the_secret() {
         .collect();
     assert_eq!(events[0]["type"], "invite_enrollment_started");
     assert_eq!(events[1]["type"], "enrollment_succeeded");
-    assert_eq!(events[1]["account"], "cli-user");
+    assert_eq!(events[1]["account"], "alice");
 
     let credentials: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(edge.config_dir.join("credentials.json")).unwrap(),
@@ -486,6 +515,18 @@ async fn manual_enrollment_reports_the_suffixed_account() {
     assert_ne!(second_account, "alice");
     assert!(second_account.starts_with("alice-"));
 
+    edge.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn account_names_longer_than_sixteen_are_rejected() {
+    let edge = start_edge(&[]).await;
+    let client = reqwest::Client::new();
+
+    let (status, body) = enroll_legacy(&client, &edge, &"a".repeat(17), APPROVAL_SECRET).await;
+
+    assert_eq!(status, 400);
+    assert_eq!(body["code"], "malformed_account");
     edge.cleanup();
 }
 
@@ -809,9 +850,22 @@ async fn enroll_with_key(
     edge: &Edge,
     key: &str,
 ) -> (u16, serde_json::Value) {
+    enroll_with_key_account(client, edge, key, None).await
+}
+
+async fn enroll_with_key_account(
+    client: &reqwest::Client,
+    edge: &Edge,
+    key: &str,
+    account: Option<&str>,
+) -> (u16, serde_json::Value) {
+    let body = match account {
+        Some(account) => serde_json::json!({ "invite_key": key, "account": account }),
+        None => serde_json::json!({ "invite_key": key }),
+    };
     let response = client
         .post(format!("{}/v1/device/enroll", edge.url))
-        .json(&serde_json::json!({ "invite_key": key }))
+        .json(&body)
         .send()
         .await
         .unwrap();

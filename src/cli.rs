@@ -225,13 +225,15 @@ mod tests {
             "login",
             "--edge",
             "https://gnar.example.com",
+            "--account",
+            "alice",
             "--key-stdin",
         ])
         .unwrap();
         match cli.command {
             Some(Command::Login(args)) => {
                 assert!(args.key_stdin);
-                assert!(args.account.is_none());
+                assert_eq!(args.account.as_deref(), Some("alice"));
                 assert!(!args.enrollment_key_stdin);
             }
             _ => panic!("expected login command"),
@@ -299,8 +301,7 @@ pub struct LoginArgs {
     #[arg(
         long,
         value_name = "ACCOUNT",
-        requires = "enrollment_key_stdin",
-        help = "Account name to enroll when reading the enrollment key from stdin"
+        help = "Account name for --enrollment-key-stdin or --key-stdin"
     )]
     pub account: Option<String>,
 
@@ -314,7 +315,7 @@ pub struct LoginArgs {
     #[arg(
         long,
         value_name = "KEY",
-        conflicts_with_all = ["account", "enrollment_key_stdin"],
+        conflicts_with = "enrollment_key_stdin",
         help = "Enroll with an invite key read from stdin instead of the device flow"
     )]
     pub key_stdin: bool,

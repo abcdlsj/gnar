@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use crate::app::App;
+use crate::app::{App, AppError};
 use crate::cli::{Cli, Command};
 use crate::edge::Edge;
 use crate::output::Output;
@@ -33,15 +33,26 @@ async fn main() -> ExitCode {
 
     let result = match cli.command {
         Some(Command::Serve(args)) => Edge::new(args).run().await,
-        Some(Command::Login(args)) => match account::command_edge(cli.edge.as_deref()) {
-            Ok(edge) if args.key_stdin => account::enroll_with_invite_stdin(&edge, &output).await,
-            Ok(edge) if args.enrollment_key_stdin => {
-                let account = args.account.as_deref().unwrap_or_default();
-                account::enroll(&edge, account, &output).await
+        Some(Command::Login(args)) => {
+            if args.account.is_some() && !args.enrollment_key_stdin && !args.key_stdin {
+                Err(AppError::Edge(
+                    "--account requires --enrollment-key-stdin or --key-stdin".into(),
+                ))
+            } else {
+                match account::command_edge(cli.edge.as_deref()) {
+                    Ok(edge) if args.key_stdin => {
+                        account::enroll_with_invite_stdin(&edge, args.account.as_deref(), &output)
+                            .await
+                    }
+                    Ok(edge) if args.enrollment_key_stdin => {
+                        let account = args.account.as_deref().unwrap_or_default();
+                        account::enroll(&edge, account, &output).await
+                    }
+                    Ok(edge) => account::login(&edge).await,
+                    Err(error) => Err(error),
+                }
             }
-            Ok(edge) => account::login(&edge).await,
-            Err(error) => Err(error),
-        },
+        }
         Some(Command::Logout) => {
             account::command_edge(cli.edge.as_deref()).and_then(|edge| account::logout(&edge))
         }

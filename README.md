@@ -166,10 +166,11 @@ The underlying file looks like this:
 ```
 
 `account` defaults to the key name, `max_uses` defaults to 1, and
-`expires_at` is an optional Unix timestamp. When an account name is already
-taken, gnar appends a random 4-character suffix for every registration path,
-including device approval, enrollment, and invite keys, so the second user of
-`demo` signs in as something like `demo-x7k2`.
+`expires_at` is an optional Unix timestamp. Invite key names and account names
+are limited to 16 characters. When an account name is already taken, gnar
+appends a random 4-character suffix for every registration path, including
+device approval, enrollment, and invite keys, so the second user of `demo`
+signs in as something like `demo-x7k2`.
 
 Hand the secret to a user and they register with one command:
 

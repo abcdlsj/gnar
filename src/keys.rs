@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppError;
 use crate::cli::{KeyAction, KeyArgs};
 use crate::output::{Event, KeySummary, Output};
-use crate::protocol::{MAX_NAME_LENGTH, valid_name};
+use crate::protocol::{MAX_ACCOUNT_NAME_LENGTH, valid_account_name};
 use crate::store::{InviteKeyRecord, hash_secret};
 
 const MAX_SECRET_BYTES: usize = 4096;
@@ -69,9 +69,9 @@ impl InviteKeysFile {
     pub fn validate(&self) -> Result<(), String> {
         let mut secrets = HashSet::new();
         for (name, key) in &self.keys {
-            if !valid_name(name) {
+            if !valid_account_name(name) {
                 return Err(format!(
-                    "invite key name {name:?} must be 1 to {MAX_NAME_LENGTH} \
+                    "invite key name {name:?} must be 1 to {MAX_ACCOUNT_NAME_LENGTH} \
                      lowercase letters, numbers, or hyphens"
                 ));
             }
@@ -88,10 +88,10 @@ impl InviteKeysFile {
                 return Err(format!("invite key {name} needs max_uses >= 1"));
             }
             if let Some(account) = &key.account
-                && !valid_name(account)
+                && !valid_account_name(account)
             {
                 return Err(format!(
-                    "invite key {name} account {account:?} must be 1 to {MAX_NAME_LENGTH} \
+                    "invite key {name} account {account:?} must be 1 to {MAX_ACCOUNT_NAME_LENGTH} \
                      lowercase letters, numbers, or hyphens"
                 ));
             }
@@ -235,11 +235,11 @@ pub fn run(args: KeyArgs, output: &Output) -> Result<(), AppError> {
 
 fn normalize_name(name: &str) -> Result<String, String> {
     let name = name.trim().to_ascii_lowercase();
-    if valid_name(&name) {
+    if valid_account_name(&name) {
         Ok(name)
     } else {
         Err(format!(
-            "name must be 1 to {MAX_NAME_LENGTH} lowercase letters, numbers, or hyphens"
+            "name must be 1 to {MAX_ACCOUNT_NAME_LENGTH} lowercase letters, numbers, or hyphens"
         ))
     }
 }

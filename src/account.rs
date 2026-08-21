@@ -161,8 +161,10 @@ pub async fn enroll(edge: &str, account: &str, output: &Output) -> Result<(), Ap
 pub async fn enroll_with_invite(
     edge: &str,
     invite_key: &str,
+    account: Option<&str>,
     output: &Output,
 ) -> Result<(), AppError> {
+    let account = account.map(normalize_account).transpose()?;
     output.event(Event::InviteEnrollmentStarted)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(15))
@@ -171,7 +173,10 @@ pub async fn enroll_with_invite(
     let endpoint = edge_endpoint(edge, "/v1/device/enroll")?;
     let response = client
         .post(endpoint)
-        .json(&InviteRequest { invite_key })
+        .json(&InviteRequest {
+            invite_key,
+            account: account.as_deref(),
+        })
         .send()
         .await
         .map_err(|error| unreachable_edge(edge, &error))?;
@@ -195,9 +200,13 @@ pub async fn enroll_with_invite(
     Ok(())
 }
 
-pub async fn enroll_with_invite_stdin(edge: &str, output: &Output) -> Result<(), AppError> {
+pub async fn enroll_with_invite_stdin(
+    edge: &str,
+    account: Option<&str>,
+    output: &Output,
+) -> Result<(), AppError> {
     let invite_key = read_secret_line()?;
-    enroll_with_invite(edge, &invite_key, output).await
+    enroll_with_invite(edge, &invite_key, account, output).await
 }
 
 pub async fn release(edge: &str, name: &str) -> Result<(), AppError> {
@@ -302,12 +311,12 @@ fn edge_endpoint(edge: &str, suffix: &str) -> Result<String, AppError> {
 
 fn normalize_account(account: &str) -> Result<String, AppError> {
     let normalized = account.trim().to_ascii_lowercase();
-    if crate::protocol::valid_name(&normalized) {
+    if crate::protocol::valid_account_name(&normalized) {
         return Ok(normalized);
     }
     Err(AppError::Edge(format!(
         "--account must be 1 to {} lowercase letters, numbers, or hyphens",
-        crate::protocol::MAX_NAME_LENGTH
+        crate::protocol::MAX_ACCOUNT_NAME_LENGTH
     )))
 }
 
@@ -349,6 +358,7 @@ struct EnrollmentRequest<'a> {
 #[derive(Serialize)]
 struct InviteRequest<'a> {
     invite_key: &'a str,
+    account: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -385,7 +395,7 @@ async fn enrollment_error(status: reqwest::StatusCode, response: reqwest::Respon
             "the invite key has reached its usage limit; ask the edge operator for a new key"
         }
         (reqwest::StatusCode::BAD_REQUEST, Some("malformed_account")) => {
-            "the account name is invalid; use 1 to 48 lowercase letters, numbers, or hyphens"
+            "the account name is invalid; use 1 to 16 lowercase letters, numbers, or hyphens"
         }
         (reqwest::StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")) => {
             "too many enrollment attempts; wait and try again"

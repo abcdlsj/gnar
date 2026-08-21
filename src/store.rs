@@ -92,6 +92,7 @@ enum Command {
     ConsumeInviteKey {
         key: String,
         token: String,
+        account: Option<String>,
         reply: InviteKeyReply,
     },
     DenyDeviceCode(String, Reply<bool>),
@@ -219,10 +220,16 @@ impl Store {
         &self,
         key: String,
         token: String,
+        account: Option<String>,
     ) -> Result<String, InviteKeyError> {
         let (reply, response) = oneshot::channel();
         self.commands
-            .send(Command::ConsumeInviteKey { key, token, reply })
+            .send(Command::ConsumeInviteKey {
+                key,
+                token,
+                account,
+                reply,
+            })
             .await
             .map_err(|_| InviteKeyError::Store(worker_stopped()))?;
         response
@@ -353,8 +360,18 @@ fn apply(connection: &Connection, command: Command, issued: &mut HashMap<String,
         Command::SyncInviteKeys(keys, reply) => {
             send(reply, sync_invite_keys(connection, &keys));
         }
-        Command::ConsumeInviteKey { key, token, reply } => {
-            let _ = reply.send(consume_invite_key(connection, &key, &token));
+        Command::ConsumeInviteKey {
+            key,
+            token,
+            account,
+            reply,
+        } => {
+            let _ = reply.send(consume_invite_key(
+                connection,
+                &key,
+                &token,
+                account.as_deref(),
+            ));
         }
         Command::DenyDeviceCode(user_code, reply) => {
             send(reply, deny_device_code(connection, &user_code));
@@ -925,6 +942,7 @@ fn consume_invite_key(
     connection: &Connection,
     key: &str,
     token: &str,
+    account_override: Option<&str>,
 ) -> Result<String, InviteKeyError> {
     let secret_hash = hash_secret(key);
     let transaction = connection
@@ -960,6 +978,7 @@ fn consume_invite_key(
         return Err(InviteKeyError::Exhausted);
     }
     let token_hash = hash_secret(token);
+    let account = account_override.unwrap_or(&account).to_string();
     let account = create_unique_account_token(&transaction, &account, &token_hash, "invite")
         .map_err(|error| InviteKeyError::Store(error.to_string()))?;
     transaction
@@ -1225,11 +1244,11 @@ mod tests {
             .unwrap();
 
         let first = store
-            .consume_invite_key("shared-secret".into(), "token-demo-1".into())
+            .consume_invite_key("shared-secret".into(), "token-demo-1".into(), None)
             .await
             .unwrap();
         let second = store
-            .consume_invite_key("shared-secret".into(), "token-demo-2".into())
+            .consume_invite_key("shared-secret".into(), "token-demo-2".into(), None)
             .await
             .unwrap();
         assert_ne!(first, second);
@@ -1237,7 +1256,7 @@ mod tests {
         assert!(second.starts_with("demo"));
         assert!(matches!(
             store
-                .consume_invite_key("shared-secret".into(), "token-demo-3".into())
+                .consume_invite_key("shared-secret".into(), "token-demo-3".into(), None)
                 .await,
             Err(InviteKeyError::Exhausted)
         ));
@@ -1261,7 +1280,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             store
-                .consume_invite_key("shared-secret".into(), "token-demo-4".into())
+                .consume_invite_key("shared-secret".into(), "token-demo-4".into(), None)
                 .await,
             Err(InviteKeyError::Expired)
         ));
@@ -1269,7 +1288,7 @@ mod tests {
         store.sync_invite_keys(vec![]).await.unwrap();
         assert!(matches!(
             store
-                .consume_invite_key("shared-secret".into(), "token-demo-5".into())
+                .consume_invite_key("shared-secret".into(), "token-demo-5".into(), None)
                 .await,
             Err(InviteKeyError::Unknown)
         ));
@@ -1293,7 +1312,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .consume_invite_key("moved-secret-123".into(), "token-before-move".into())
+                .consume_invite_key("moved-secret-123".into(), "token-before-move".into(), None)
                 .await
                 .is_ok()
         );
@@ -1311,7 +1330,7 @@ mod tests {
 
         assert!(matches!(
             store
-                .consume_invite_key("moved-secret-123".into(), "token-after-move".into())
+                .consume_invite_key("moved-secret-123".into(), "token-after-move".into(), None)
                 .await,
             Err(InviteKeyError::Exhausted)
         ));

@@ -6,6 +6,12 @@ license = "MIT"
 repository = "https://github.com/abcdlsj/gnar"
 description = "Publish and inspect a local HTTP service"
 
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
 [dependencies]
 anstyle = "1.0.14"
 axum = { version = "0.8", features = ["ws"] }

@@ -1,7 +1,11 @@
 # AGENTS.md
 
+## Core Principles
+
+- User-first, out-of-the-box use, and minimal configuration are the highest priorities. `gnar` should work with no configuration whenever possible; prefer sensible defaults, automatic discovery, and progressive disclosure of advanced options. Keep self-hosting and operational concepts out of the normal client path.
+- Release binary size is a core engineering quality metric. Assess the impact of every new dependency, feature, protocol, or build setting on each release target; measure and record release artifacts before handoff, and prefer small, maintained dependencies with only the features that are needed. Never trade supported behavior, security, or reliability for a smaller binary.
+
 - Treat `README.md` as the single source of truth for product behavior, domain language, architecture, and scope. Update it before implementing a conflicting decision. Do not create competing design documents.
-- Optimize the default journey for running `gnar` with no configuration. Keep self-hosting and operational concepts out of the normal client experience.
 - Keep the product HTTP-first and interaction-first. Complete the HTTP request-inspection experience before adding protocols or administration features.
 - Follow robpick guidance: use precise domain names, keep cohesive code together, prefer small interfaces, and make state ownership obvious.
 - Prefer a maintained third-party library when it removes non-product infrastructure. Keep dependencies focused and behind narrow local boundaries; avoid overlapping libraries.

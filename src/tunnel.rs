@@ -125,6 +125,7 @@ pub async fn run(
     let websocket_url = websocket_url(&edge)?;
     let name = name.map(normalize_name).transpose()?;
     let token = crate::account::token_for(&edge);
+    output.event(Event::Connecting { edge: &edge })?;
     let (writer, reader, opened) =
         connect_tunnel(&websocket_url, name, settings, token.as_deref()).await?;
     let mut settings = opened.settings.clone();

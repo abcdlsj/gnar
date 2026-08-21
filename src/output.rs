@@ -31,6 +31,9 @@ pub enum Event<'a> {
         target: &'a str,
         reason: &'a str,
     },
+    Connecting {
+        edge: &'a str,
+    },
     TunnelReady {
         public_url: &'a str,
         target: &'a str,
@@ -113,6 +116,9 @@ impl Output {
             ),
             Event::LocalUnavailable { target, reason } => {
                 writeln!(writer, "Failed  {target} is unavailable: {reason}")
+            }
+            Event::Connecting { edge } => {
+                writeln!(writer, "Connecting to {edge}")
             }
             Event::TunnelReady {
                 public_url,

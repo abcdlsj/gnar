@@ -167,6 +167,7 @@ pub enum AppError {
     Unavailable,
     Output(std::io::Error),
     Edge(String),
+    Key(String),
 }
 
 impl fmt::Display for AppError {
@@ -189,6 +190,7 @@ impl fmt::Display for AppError {
             ),
             Self::Output(error) => write!(formatter, "could not write output: {error}"),
             Self::Edge(reason) => write!(formatter, "edge connection failed: {reason}"),
+            Self::Key(reason) => write!(formatter, "invite key: {reason}"),
         }
     }
 }

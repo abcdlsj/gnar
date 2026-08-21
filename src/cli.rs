@@ -219,19 +219,18 @@ mod tests {
     }
 
     #[test]
-    fn invite_login_uses_the_key_flag() {
+    fn invite_login_reads_the_key_from_stdin() {
         let cli = Cli::try_parse_from([
             "gnar",
             "login",
             "--edge",
             "https://gnar.example.com",
-            "--key",
-            "ABCD-EFGH-IJKL",
+            "--key-stdin",
         ])
         .unwrap();
         match cli.command {
             Some(Command::Login(args)) => {
-                assert_eq!(args.key.as_deref(), Some("ABCD-EFGH-IJKL"));
+                assert!(args.key_stdin);
                 assert!(args.account.is_none());
                 assert!(!args.enrollment_key_stdin);
             }
@@ -316,9 +315,9 @@ pub struct LoginArgs {
         long,
         value_name = "KEY",
         conflicts_with_all = ["account", "enrollment_key_stdin"],
-        help = "Enroll with an invite key instead of the device flow"
+        help = "Enroll with an invite key read from stdin instead of the device flow"
     )]
-    pub key: Option<String>,
+    pub key_stdin: bool,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -356,13 +355,21 @@ pub enum KeyAction {
         #[arg(long)]
         account: Option<String>,
 
-        #[arg(long)]
-        secret: Option<String>,
+        #[arg(long, help = "Read the secret from stdin instead of generating one")]
+        secret_stdin: bool,
+
+        #[arg(long, help = "Print the secret once after creating or updating")]
+        show_secret: bool,
     },
     /// List configured invite keys
     List,
     /// Remove an invite key
     Revoke {
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    /// Show an invite key's secret
+    Show {
         #[arg(value_name = "NAME")]
         name: String,
     },

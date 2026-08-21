@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use crate::app::{App, AppError};
+use crate::app::App;
 use crate::cli::{Cli, Command};
 use crate::edge::Edge;
 use crate::output::Output;
@@ -34,10 +34,7 @@ async fn main() -> ExitCode {
     let result = match cli.command {
         Some(Command::Serve(args)) => Edge::new(args).run().await,
         Some(Command::Login(args)) => match account::command_edge(cli.edge.as_deref()) {
-            Ok(edge) if args.key.is_some() => {
-                let key = args.key.as_deref().unwrap_or_default();
-                account::enroll_with_invite(&edge, key, &output).await
-            }
+            Ok(edge) if args.key_stdin => account::enroll_with_invite_stdin(&edge, &output).await,
             Ok(edge) if args.enrollment_key_stdin => {
                 let account = args.account.as_deref().unwrap_or_default();
                 account::enroll(&edge, account, &output).await
@@ -56,7 +53,7 @@ async fn main() -> ExitCode {
             Ok(edge) => account::release(&edge, &name).await,
             Err(error) => Err(error),
         },
-        Some(Command::Key(args)) => keys::run(args).map_err(AppError::Edge),
+        Some(Command::Key(args)) => keys::run(args, &output),
         Some(Command::Version) => {
             println!("gnar {}", env!("CARGO_PKG_VERSION"));
             Ok(())

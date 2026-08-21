@@ -73,6 +73,7 @@ gnar release <name>           release a reserved endpoint name
 gnar key add <name>           create or update an invite key
 gnar key list                 list configured invite keys
 gnar key revoke <name>        remove an invite key
+gnar key show <name>          display an invite key's secret
 gnar serve                    run a self-hosted edge
 gnar version                  print version information
 ```
@@ -142,8 +143,12 @@ Create a key:
 ```console
 $ gnar key add demo --max-uses 3 --expires-in 7d
 Key demo -> account demo, max 3 uses, expires 1780000000
-Share: gnar login --edge https://gnar.example.com --key AB12-CD34-EF56
+Secret stored in the keys file; run `gnar key show demo` to display it
 ```
+
+The secret is not printed by default so it stays out of terminal scrollback
+and logs. Pass `--show-secret` to print it once during creation, or use
+`gnar key show demo` later.
 
 The underlying file looks like this:
 
@@ -169,13 +174,14 @@ including device approval, enrollment, and invite keys, so the second user of
 Hand the secret to a user and they register with one command:
 
 ```console
-$ gnar login --edge https://gnar.example.com --key AB12-CD34-EF56
+$ echo 'AB12-CD34-EF56' | gnar login --edge https://gnar.example.com --key-stdin
 ✓ Signed in as demo-x7k2
 ```
 
 Removing a key from the file stops new signups immediately. Existing account
 tokens stay valid; the key file is written with owner-only permissions, and
-the edge stores only a hash of each key.
+the edge refuses to load a key file that is readable or writable by group or
+others. The edge stores only a hash of each key.
 
 ## Request inspector
 

@@ -1,15 +1,20 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+use crate::app::AppError;
 use crate::cli::{KeyAction, KeyArgs};
+use crate::output::{Event, KeySummary, Output};
 use crate::protocol::{MAX_NAME_LENGTH, valid_name};
 use crate::store::{InviteKeyRecord, hash_secret};
+
+const MAX_SECRET_BYTES: usize = 4096;
+const MIN_SECRET_LENGTH: usize = 12;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct InviteKeysFile {
@@ -17,7 +22,7 @@ pub struct InviteKeysFile {
     pub keys: BTreeMap<String, InviteKey>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InviteKey {
     #[serde(default)]
     pub secret: String,
@@ -29,14 +34,28 @@ pub struct InviteKey {
     pub account: Option<String>,
 }
 
+impl Default for InviteKey {
+    fn default() -> Self {
+        Self {
+            secret: String::new(),
+            max_uses: 1,
+            expires_at: None,
+            account: None,
+        }
+    }
+}
+
 fn default_max_uses() -> u32 {
     1
 }
 
 impl InviteKeysFile {
     pub fn load(path: &Path) -> Result<Self, String> {
-        match fs::read_to_string(path) {
-            Ok(content) => {
+        match fs::metadata(path) {
+            Ok(_) => {
+                check_private_permissions(path)?;
+                let content = fs::read_to_string(path)
+                    .map_err(|error| format!("could not read {}: {error}", path.display()))?;
                 let file: Self = serde_json::from_str(&content)
                     .map_err(|error| format!("invalid JSON in {}: {error}", path.display()))?;
                 file.validate()?;
@@ -59,6 +78,11 @@ impl InviteKeysFile {
             let secret = key.secret.trim();
             if secret.is_empty() {
                 return Err(format!("invite key {name} needs a non-empty secret"));
+            }
+            if secret.len() < MIN_SECRET_LENGTH {
+                return Err(format!(
+                    "invite key {name} secret must be at least {MIN_SECRET_LENGTH} characters"
+                ));
             }
             if key.max_uses == 0 {
                 return Err(format!("invite key {name} needs max_uses >= 1"));
@@ -114,7 +138,7 @@ impl InviteKeysFile {
     }
 }
 
-pub fn run(args: KeyArgs) -> Result<(), String> {
+pub fn run(args: KeyArgs, output: &Output) -> Result<(), AppError> {
     let path = args.file;
     match args.action {
         KeyAction::Add {
@@ -122,13 +146,14 @@ pub fn run(args: KeyArgs) -> Result<(), String> {
             max_uses,
             expires_in,
             account,
-            secret,
+            secret_stdin,
+            show_secret,
         } => {
-            let mut file = InviteKeysFile::load(&path)?;
-            let name = normalize_name(&name)?;
+            let mut file = InviteKeysFile::load(&path).map_err(AppError::Key)?;
+            let name = normalize_name(&name).map_err(AppError::Key)?;
             let mut key = file.keys.get(&name).cloned().unwrap_or_default();
-            if let Some(secret) = secret {
-                key.secret = secret.trim().to_string();
+            if secret_stdin {
+                key.secret = read_secret_line()?;
             }
             if key.secret.is_empty() {
                 key.secret = random_secret();
@@ -137,60 +162,72 @@ pub fn run(args: KeyArgs) -> Result<(), String> {
                 key.max_uses = max_uses;
             }
             if let Some(expires_in) = expires_in {
-                let duration = i64::try_from(parse_duration(&expires_in)?)
-                    .map_err(|_| format!("duration {expires_in:?} is too large"))?;
-                key.expires_at = Some(
-                    now_epoch()
-                        .checked_add(duration)
-                        .ok_or_else(|| format!("duration {expires_in:?} is too large"))?,
-                );
+                let duration = i64::try_from(parse_duration(&expires_in).map_err(AppError::Key)?)
+                    .map_err(|_| {
+                    AppError::Key(format!("duration {expires_in:?} is too large"))
+                })?;
+                key.expires_at = Some(now_epoch().checked_add(duration).ok_or_else(|| {
+                    AppError::Key(format!("duration {expires_in:?} is too large"))
+                })?);
             }
             if let Some(account) = account {
-                key.account = Some(normalize_name(&account)?);
+                key.account = Some(normalize_name(&account).map_err(AppError::Key)?);
             }
             let account_name = key.account.clone().unwrap_or_else(|| name.clone());
             file.keys.insert(name.clone(), key.clone());
-            file.validate()?;
-            file.write(&path)?;
-            let expires = key
-                .expires_at
-                .map(|epoch| epoch.to_string())
-                .unwrap_or_else(|| "never".into());
-            println!(
-                "Key {name} -> account {account_name}, max {max} uses, expires {expires}",
-                max = key.max_uses
-            );
-            println!("Share: gnar login --edge <EDGE_URL> --key {}", key.secret);
+            file.validate().map_err(AppError::Key)?;
+            file.write(&path).map_err(AppError::Key)?;
+            let secret = if show_secret {
+                Some(key.secret.as_str())
+            } else {
+                None
+            };
+            output.event(Event::KeyAdded {
+                name: &name,
+                account: &account_name,
+                max_uses: key.max_uses,
+                expires_at: key.expires_at,
+                secret,
+            })?;
             Ok(())
         }
         KeyAction::List => {
-            let file = InviteKeysFile::load(&path)?;
-            if file.keys.is_empty() {
-                println!("No invite keys configured in {}", path.display());
-                return Ok(());
-            }
-            for (name, key) in file.keys {
-                let account = key.account.as_deref().unwrap_or(&name);
-                let expires = key
-                    .expires_at
-                    .map(|epoch| epoch.to_string())
-                    .unwrap_or_else(|| "never".into());
-                println!(
-                    "{name}\taccount {account}\tmax {} uses\texpires {expires}",
-                    key.max_uses
-                );
-            }
+            let file = InviteKeysFile::load(&path).map_err(AppError::Key)?;
+            let keys = file
+                .keys
+                .iter()
+                .map(|(name, key)| KeySummary {
+                    name: name.clone(),
+                    account: key.account.clone().unwrap_or_else(|| name.clone()),
+                    max_uses: key.max_uses,
+                    expires_at: key.expires_at,
+                })
+                .collect();
+            output.event(Event::KeyList { keys })?;
             Ok(())
         }
         KeyAction::Revoke { name } => {
-            let mut file = InviteKeysFile::load(&path)?;
-            let name = normalize_name(&name)?;
+            let mut file = InviteKeysFile::load(&path).map_err(AppError::Key)?;
+            let name = normalize_name(&name).map_err(AppError::Key)?;
             if file.keys.remove(&name).is_some() {
-                file.write(&path)?;
-                println!("Removed invite key {name}");
+                file.write(&path).map_err(AppError::Key)?;
+                output.event(Event::KeyRevoked { name: &name })?;
+                Ok(())
             } else {
-                println!("No invite key named {name}");
+                Err(AppError::Key(format!("no invite key named {name}")))
             }
+        }
+        KeyAction::Show { name } => {
+            let file = InviteKeysFile::load(&path).map_err(AppError::Key)?;
+            let name = normalize_name(&name).map_err(AppError::Key)?;
+            let key = file
+                .keys
+                .get(&name)
+                .ok_or_else(|| AppError::Key(format!("no invite key named {name}")))?;
+            output.event(Event::KeyShown {
+                name: &name,
+                secret: &key.secret,
+            })?;
             Ok(())
         }
     }
@@ -246,6 +283,25 @@ fn random_secret() -> String {
     groups.join("-")
 }
 
+fn read_secret_line() -> Result<String, AppError> {
+    let mut input = String::new();
+    let mut bounded = std::io::Read::take(std::io::stdin().lock(), (MAX_SECRET_BYTES + 1) as u64);
+    bounded
+        .read_line(&mut input)
+        .map_err(|error| AppError::Key(format!("could not read the secret from stdin: {error}")))?;
+    if input.len() > MAX_SECRET_BYTES {
+        return Err(AppError::Key("the secret from stdin is too long".into()));
+    }
+    let secret = input.strip_suffix('\n').unwrap_or(&input);
+    let secret = secret.strip_suffix('\r').unwrap_or(secret);
+    if secret.is_empty() {
+        return Err(AppError::Key(
+            "the secret stdin must contain one non-empty line".into(),
+        ));
+    }
+    Ok(secret.to_string())
+}
+
 fn now_epoch() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -266,6 +322,31 @@ fn write_private(path: &Path, content: &[u8]) -> Result<(), String> {
     file.write_all(content)
         .and_then(|_| file.sync_all())
         .map_err(|error| format!("could not write {}: {error}", path.display()))
+}
+
+#[cfg(unix)]
+fn check_private_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = fs::metadata(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(format!(
+            "{} is readable or writable by group or others (mode {mode:o}); \
+             run chmod 600 {}",
+            path.display(),
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_private_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(not(unix))]
@@ -304,18 +385,38 @@ mod tests {
                 (
                     "alpha".into(),
                     InviteKey {
-                        secret: "same-secret".into(),
+                        secret: "same-secret-123".into(),
                         ..Default::default()
                     },
                 ),
                 (
                     "beta".into(),
                     InviteKey {
-                        secret: "same-secret".into(),
+                        secret: "same-secret-123".into(),
                         ..Default::default()
                     },
                 ),
             ]),
+        };
+
+        assert!(file.validate().is_err());
+    }
+
+    #[test]
+    fn default_key_allows_one_use() {
+        assert_eq!(InviteKey::default().max_uses, 1);
+    }
+
+    #[test]
+    fn short_secrets_are_rejected() {
+        let file = InviteKeysFile {
+            keys: BTreeMap::from([(
+                "demo".into(),
+                InviteKey {
+                    secret: "short".into(),
+                    ..Default::default()
+                },
+            )]),
         };
 
         assert!(file.validate().is_err());

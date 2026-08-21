@@ -123,7 +123,7 @@ pub async fn login(edge: &str) -> Result<(), AppError> {
 pub async fn enroll(edge: &str, account: &str, output: &Output) -> Result<(), AppError> {
     let account = normalize_account(account)?;
     output.event(Event::EnrollmentStarted { account: &account })?;
-    let enrollment_key = read_enrollment_key()?;
+    let enrollment_key = read_secret_line()?;
     let client = Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -193,6 +193,11 @@ pub async fn enroll_with_invite(
         account: &reply.account,
     })?;
     Ok(())
+}
+
+pub async fn enroll_with_invite_stdin(edge: &str, output: &Output) -> Result<(), AppError> {
+    let invite_key = read_secret_line()?;
+    enroll_with_invite(edge, &invite_key, output).await
 }
 
 pub async fn release(edge: &str, name: &str) -> Result<(), AppError> {
@@ -306,7 +311,7 @@ fn normalize_account(account: &str) -> Result<String, AppError> {
     )))
 }
 
-fn read_enrollment_key() -> Result<String, AppError> {
+fn read_secret_line() -> Result<String, AppError> {
     let mut stdin = io::stdin().lock();
     read_enrollment_key_from(&mut stdin)
 }
@@ -328,7 +333,7 @@ fn read_enrollment_key_from(reader: &mut impl BufRead) -> Result<String, AppErro
     let key = key.strip_suffix('\r').unwrap_or(key);
     if key.is_empty() {
         return Err(AppError::Edge(
-            "enrollment key stdin must contain one non-empty line".into(),
+            "secret stdin must contain one non-empty line".into(),
         ));
     }
     Ok(key.to_string())

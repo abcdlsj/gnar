@@ -791,11 +791,17 @@ fn unique_account_name(connection: &Connection, requested: &str) -> rusqlite::Re
     }
     const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
     let mut rng = rand::rng();
+    let base = requested
+        .chars()
+        .take(crate::protocol::MAX_NAME_LENGTH - 5)
+        .collect::<String>();
+    let base = base.trim_end_matches('-').to_string();
+    let base = if base.is_empty() { "acct".into() } else { base };
     for _ in 0..16 {
         let suffix: String = (0..4)
             .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
             .collect();
-        let candidate = format!("{requested}-{suffix}");
+        let candidate = format!("{base}-{suffix}");
         if crate::protocol::valid_name(&candidate) && !account_exists(connection, &candidate) {
             return Ok(candidate);
         }
@@ -842,6 +848,11 @@ fn create_account_token(
 fn sync_invite_keys(connection: &Connection, keys: &[InviteKeyRecord]) -> rusqlite::Result<()> {
     let transaction = connection.unchecked_transaction()?;
     for key in keys {
+        transaction.execute(
+            "DELETE FROM invite_keys
+             WHERE secret_hash = ?1 AND name != ?2",
+            params![key.secret_hash, key.name],
+        )?;
         transaction.execute(
             "INSERT INTO invite_keys(
                  name, secret_hash, max_uses, expires_at, account,
@@ -1149,6 +1160,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn long_account_names_keep_room_for_the_suffix() {
+        let (store, path) = store("long-suffix").await;
+        let long_name = format!("{}-b", "a".repeat(46));
+        assert_eq!(long_name.len(), 48);
+        sign_in(&store, &long_name).await;
+
+        let account = store
+            .enroll_account(long_name.clone(), "token-long-2".into())
+            .await
+            .unwrap();
+
+        assert_ne!(account, long_name);
+        assert!(account.len() <= 48);
+        assert!(account.starts_with(&long_name[..38]));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
     async fn invite_keys_are_consumed_with_limits_and_expiry() {
         let (store, path) = store("invite").await;
         store
@@ -1210,6 +1240,42 @@ mod tests {
                 .consume_invite_key("shared-secret".into(), "token-demo-5".into())
                 .await,
             Err(InviteKeyError::Unknown)
+        ));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn a_secret_can_move_to_a_new_key_name() {
+        let (store, path) = store("secret-move").await;
+        let secret_hash = hash_secret("moved-secret-123");
+        store
+            .sync_invite_keys(vec![InviteKeyRecord {
+                name: "old-name".into(),
+                secret_hash: secret_hash.clone(),
+                max_uses: 1,
+                expires_at: None,
+                account: "old-name".into(),
+            }])
+            .await
+            .unwrap();
+
+        store
+            .sync_invite_keys(vec![InviteKeyRecord {
+                name: "new-name".into(),
+                secret_hash,
+                max_uses: 1,
+                expires_at: None,
+                account: "new-name".into(),
+            }])
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            store
+                .consume_invite_key("moved-secret-123".into(), "token-moved".into())
+                .await,
+            Ok(account) if account.starts_with("new-name")
         ));
 
         let _ = std::fs::remove_file(&path);

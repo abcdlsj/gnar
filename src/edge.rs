@@ -172,6 +172,20 @@ impl Edge {
             .await
             .map_err(AppError::Edge)?;
         let keys_store = store.clone();
+        let keys_path = config.keys_file.clone();
+        match crate::keys::InviteKeysFile::load(&keys_path) {
+            Ok(keys) => {
+                if let Err(error) = keys_store.sync_invite_keys(keys.records()).await {
+                    tracing::error!(%error, "could not sync invite keys at startup");
+                }
+                println!(
+                    "  keys     {} configured in {}",
+                    keys.keys.len(),
+                    keys_path.display()
+                );
+            }
+            Err(error) => tracing::warn!(%error, "could not load invite keys"),
+        }
         let state = EdgeState {
             public_url: config.public_url.trim_end_matches('/').to_string(),
             base_path: base_path.clone(),
@@ -193,15 +207,6 @@ impl Edge {
             websocket_frames_per_minute: config.websocket_frames_per_minute(),
             config: config.clone(),
         };
-        let keys_path = config.keys_file.clone();
-        match crate::keys::InviteKeysFile::load(&keys_path) {
-            Ok(keys) => println!(
-                "  keys     {} configured in {}",
-                keys.keys.len(),
-                keys_path.display()
-            ),
-            Err(error) => tracing::warn!(%error, "could not load invite keys"),
-        }
         tokio::spawn(reload_invite_keys(keys_path, keys_store));
         let mut source_limit = GovernorConfigBuilder::default();
         source_limit.per_second(10).burst_size(6);
@@ -351,11 +356,13 @@ async fn cleanup_loop(store: Store) {
 
 async fn reload_invite_keys(path: PathBuf, store: Store) {
     let mut last_modified: Option<SystemTime> = None;
+    let mut first = true;
     loop {
         let modified = fs::metadata(&path)
             .and_then(|metadata| metadata.modified())
             .ok();
-        if modified != last_modified {
+        if first || modified != last_modified {
+            first = false;
             last_modified = modified;
             match crate::keys::InviteKeysFile::load(&path) {
                 Ok(keys) => match store.sync_invite_keys(keys.records()).await {
@@ -1164,19 +1171,17 @@ async fn enroll_device(
     };
 
     let token = format!("gnar_{}", random_secret());
-    if state
-        .store
-        .enroll_account(account.clone(), token.clone())
-        .await
-        .is_err()
-    {
-        tracing::error!("could not persist an enrolled account");
-        return enrollment_json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "edge_unavailable",
-            "the edge could not persist the account; try again",
-        );
-    }
+    let account = match state.store.enroll_account(account, token.clone()).await {
+        Ok(account) => account,
+        Err(error) => {
+            tracing::error!(%error, "could not persist an enrolled account");
+            return enrollment_json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "edge_unavailable",
+                "the edge could not persist the account; try again",
+            );
+        }
+    };
     Json(serde_json::json!({
         "status": "enrolled",
         "account": account,

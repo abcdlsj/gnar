@@ -3,6 +3,14 @@ use std::io::{self, IsTerminal, Write};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
+pub struct KeySummary {
+    pub name: String,
+    pub account: String,
+    pub max_uses: u32,
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event<'a> {
     Discovering,
@@ -37,6 +45,23 @@ pub enum Event<'a> {
     InviteEnrollmentStarted,
     EnrollmentSucceeded {
         account: &'a str,
+    },
+    KeyAdded {
+        name: &'a str,
+        account: &'a str,
+        max_uses: u32,
+        expires_at: Option<i64>,
+        secret: Option<&'a str>,
+    },
+    KeyList {
+        keys: Vec<KeySummary>,
+    },
+    KeyRevoked {
+        name: &'a str,
+    },
+    KeyShown {
+        name: &'a str,
+        secret: &'a str,
     },
 }
 
@@ -128,6 +153,55 @@ impl Output {
             }
             Event::EnrollmentSucceeded { account } => {
                 writeln!(writer, "Signed  in as {account}")
+            }
+            Event::KeyAdded {
+                name,
+                account,
+                max_uses,
+                expires_at,
+                secret,
+            } => {
+                let expires = expires_at
+                    .map(|epoch| epoch.to_string())
+                    .unwrap_or_else(|| "never".into());
+                writeln!(
+                    writer,
+                    "Key {name} -> account {account}, max {max_uses} uses, expires {expires}"
+                )?;
+                match secret {
+                    Some(secret) => writeln!(
+                        writer,
+                        "Share: gnar login --edge <EDGE_URL> --key-stdin <<< '{secret}'"
+                    ),
+                    None => writeln!(
+                        writer,
+                        "Secret stored in the keys file; run `gnar key show {name}` to display it"
+                    ),
+                }
+            }
+            Event::KeyList { keys } => {
+                if keys.is_empty() {
+                    writeln!(writer, "No invite keys configured")?;
+                } else {
+                    for key in keys {
+                        let expires = key
+                            .expires_at
+                            .map(|epoch| epoch.to_string())
+                            .unwrap_or_else(|| "never".into());
+                        writeln!(
+                            writer,
+                            "{}\taccount {}\tmax {} uses\texpires {expires}",
+                            key.name, key.account, key.max_uses
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+            Event::KeyRevoked { name } => {
+                writeln!(writer, "Removed invite key {name}")
+            }
+            Event::KeyShown { name, secret } => {
+                writeln!(writer, "Secret for {name}: {secret}")
             }
         }
     }

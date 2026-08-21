@@ -34,6 +34,7 @@ pub enum Event<'a> {
     EnrollmentStarted {
         account: &'a str,
     },
+    InviteEnrollmentStarted,
     EnrollmentSucceeded {
         account: &'a str,
     },
@@ -121,6 +122,9 @@ impl Output {
             }
             Event::EnrollmentStarted { account } => {
                 writeln!(writer, "Enroll  account {account}")
+            }
+            Event::InviteEnrollmentStarted => {
+                writeln!(writer, "Enroll  invite key")
             }
             Event::EnrollmentSucceeded { account } => {
                 writeln!(writer, "Signed  in as {account}")

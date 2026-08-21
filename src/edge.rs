@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
@@ -34,7 +36,9 @@ use crate::cli::ServeArgs;
 use crate::protocol::{
     self, ClientFrame, EdgeFrame, ForwardSettings, OpenTunnel, TunnelOpened, WsMessage,
 };
-use crate::store::{self, DeviceCode, DeviceState, NameClaim, RequestRecord, Store};
+use crate::store::{
+    self, DeviceCode, DeviceState, InviteKeyError, NameClaim, RequestRecord, Store,
+};
 
 const FRAME_QUEUE: usize = 16;
 const BODY_QUEUE: usize = 16;
@@ -167,6 +171,7 @@ impl Edge {
         let store = Store::open(config.database.clone())
             .await
             .map_err(AppError::Edge)?;
+        let keys_store = store.clone();
         let state = EdgeState {
             public_url: config.public_url.trim_end_matches('/').to_string(),
             base_path: base_path.clone(),
@@ -188,6 +193,16 @@ impl Edge {
             websocket_frames_per_minute: config.websocket_frames_per_minute(),
             config: config.clone(),
         };
+        let keys_path = config.keys_file.clone();
+        match crate::keys::InviteKeysFile::load(&keys_path) {
+            Ok(keys) => println!(
+                "  keys     {} configured in {}",
+                keys.keys.len(),
+                keys_path.display()
+            ),
+            Err(error) => tracing::warn!(%error, "could not load invite keys"),
+        }
+        tokio::spawn(reload_invite_keys(keys_path, keys_store));
         let mut source_limit = GovernorConfigBuilder::default();
         source_limit.per_second(10).burst_size(6);
         let source_limit = Arc::new(
@@ -331,6 +346,26 @@ async fn cleanup_loop(store: Store) {
             ),
             Err(error) => tracing::error!(%error, "could not clean expired edge state"),
         }
+    }
+}
+
+async fn reload_invite_keys(path: PathBuf, store: Store) {
+    let mut last_modified: Option<SystemTime> = None;
+    loop {
+        let modified = fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if modified != last_modified {
+            last_modified = modified;
+            match crate::keys::InviteKeysFile::load(&path) {
+                Ok(keys) => match store.sync_invite_keys(keys.records()).await {
+                    Ok(()) => tracing::debug!("reloaded invite keys from {}", path.display()),
+                    Err(error) => tracing::error!(%error, "could not sync invite keys"),
+                },
+                Err(error) => tracing::warn!(%error, "ignoring invalid invite key file"),
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -1080,6 +1115,16 @@ async fn enroll_device(
             );
         }
     };
+    if state.config.anonymous_only {
+        return enrollment_json_error(
+            StatusCode::NOT_FOUND,
+            "enrollment_disabled",
+            "this edge serves anonymous tunnels only",
+        );
+    }
+    if let Some(invite_key) = body.get("invite_key").and_then(|value| value.as_str()) {
+        return enroll_with_invite(state, invite_key).await;
+    }
     let Some(expected) = &state.config.approval_secret else {
         return enrollment_json_error(
             StatusCode::NOT_FOUND,
@@ -1138,6 +1183,52 @@ async fn enroll_device(
         "token": token,
     }))
     .into_response()
+}
+
+async fn enroll_with_invite(state: EdgeState, invite_key: &str) -> Response {
+    if invite_key.is_empty() {
+        return enrollment_json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_invite_key",
+            "the invite key was not recognized",
+        );
+    }
+    let token = format!("gnar_{}", random_secret());
+    match state
+        .store
+        .consume_invite_key(invite_key.to_string(), token.clone())
+        .await
+    {
+        Ok(account) => Json(serde_json::json!({
+            "status": "enrolled",
+            "account": account,
+            "token": token,
+        }))
+        .into_response(),
+        Err(InviteKeyError::Unknown) => enrollment_json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_invite_key",
+            "the invite key was not recognized",
+        ),
+        Err(InviteKeyError::Expired) => enrollment_json_error(
+            StatusCode::FORBIDDEN,
+            "invite_key_expired",
+            "the invite key has expired",
+        ),
+        Err(InviteKeyError::Exhausted) => enrollment_json_error(
+            StatusCode::FORBIDDEN,
+            "invite_key_exhausted",
+            "the invite key has reached its usage limit",
+        ),
+        Err(InviteKeyError::Store(error)) => {
+            tracing::error!(%error, "could not consume an invite key");
+            enrollment_json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "edge_unavailable",
+                "the edge could not register the account; try again",
+            )
+        }
+    }
 }
 
 async fn redeem_device_code(
@@ -1226,7 +1317,7 @@ async fn approve_device_page(
         .approve_device_code(user_code, account.clone(), token)
         .await
     {
-        Ok(Some(_)) => device_html(
+        Ok(Some(account)) => device_html(
             StatusCode::OK,
             &format!(
                 "<h1>Approved</h1><p>Signed in as <b>{}</b>. Return to your terminal.</p>",

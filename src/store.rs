@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, params};
+use rand::Rng;
+use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::{mpsc, oneshot};
 
 const ENDPOINT_LIFETIME_SECONDS: i64 = 3600;
@@ -27,6 +29,22 @@ pub struct RequestRecord {
 pub struct Account {
     pub id: i64,
     pub name: String,
+}
+
+pub struct InviteKeyRecord {
+    pub name: String,
+    pub secret_hash: String,
+    pub max_uses: u32,
+    pub expires_at: Option<i64>,
+    pub account: String,
+}
+
+#[derive(Debug)]
+pub enum InviteKeyError {
+    Unknown,
+    Expired,
+    Exhausted,
+    Store(String),
 }
 
 pub struct DeviceCode {
@@ -68,7 +86,13 @@ enum Command {
     EnrollAccount {
         account_name: String,
         token_hash: String,
-        reply: Reply<()>,
+        reply: Reply<String>,
+    },
+    SyncInviteKeys(Vec<InviteKeyRecord>, Reply<()>),
+    ConsumeInviteKey {
+        key: String,
+        token: String,
+        reply: InviteKeyReply,
     },
     DenyDeviceCode(String, Reply<bool>),
     PollDeviceCode(String, Reply<DeviceState>),
@@ -89,6 +113,7 @@ enum Command {
 }
 
 type Reply<T> = oneshot::Sender<Result<T, String>>;
+type InviteKeyReply = oneshot::Sender<Result<String, InviteKeyError>>;
 
 #[derive(Clone)]
 pub struct Store {
@@ -171,7 +196,11 @@ impl Store {
         .await
     }
 
-    pub async fn enroll_account(&self, account_name: String, token: String) -> Result<(), String> {
+    pub async fn enroll_account(
+        &self,
+        account_name: String,
+        token: String,
+    ) -> Result<String, String> {
         let token_hash = hash_secret(&token);
         self.request(|reply| Command::EnrollAccount {
             account_name,
@@ -179,6 +208,26 @@ impl Store {
             reply,
         })
         .await
+    }
+
+    pub async fn sync_invite_keys(&self, keys: Vec<InviteKeyRecord>) -> Result<(), String> {
+        self.request(|reply| Command::SyncInviteKeys(keys, reply))
+            .await
+    }
+
+    pub async fn consume_invite_key(
+        &self,
+        key: String,
+        token: String,
+    ) -> Result<String, InviteKeyError> {
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(Command::ConsumeInviteKey { key, token, reply })
+            .await
+            .map_err(|_| InviteKeyError::Store(worker_stopped()))?;
+        response
+            .await
+            .map_err(|_| InviteKeyError::Store(worker_stopped()))?
     }
 
     pub async fn deny_device_code(&self, user_code: String) -> Result<bool, String> {
@@ -285,10 +334,13 @@ fn apply(connection: &Connection, command: Command, issued: &mut HashMap<String,
             reply,
         } => {
             let result = approve_device_code(connection, &user_code, &account_name, &token_hash);
-            if let Ok(Some(device_code_hash)) = &result {
-                issued.insert(device_code_hash.clone(), token);
+            if let Ok(Some(approved)) = &result {
+                issued.insert(approved.device_code_hash.clone(), token);
             }
-            send(reply, result.map(|hash| hash.map(|_| account_name)));
+            send(
+                reply,
+                result.map(|approved| approved.map(|approved| approved.account)),
+            );
         }
         Command::EnrollAccount {
             account_name,
@@ -296,8 +348,14 @@ fn apply(connection: &Connection, command: Command, issued: &mut HashMap<String,
             reply,
         } => send(
             reply,
-            create_account_token(connection, &account_name, &token_hash, "enrollment").map(|_| ()),
+            create_unique_account_token(connection, &account_name, &token_hash, "enrollment"),
         ),
+        Command::SyncInviteKeys(keys, reply) => {
+            send(reply, sync_invite_keys(connection, &keys));
+        }
+        Command::ConsumeInviteKey { key, token, reply } => {
+            let _ = reply.send(consume_invite_key(connection, &key, &token));
+        }
         Command::DenyDeviceCode(user_code, reply) => {
             send(reply, deny_device_code(connection, &user_code));
         }
@@ -505,7 +563,7 @@ fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
         [],
         |row| row.get::<_, usize>(0),
     )?;
-    const MIGRATIONS: [&str; 3] = [
+    const MIGRATIONS: [&str; 4] = [
         "CREATE TABLE IF NOT EXISTS endpoints (
              id INTEGER PRIMARY KEY,
              name TEXT NOT NULL UNIQUE,
@@ -561,6 +619,18 @@ fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
              requests INTEGER NOT NULL,
              PRIMARY KEY (endpoint_id, minute)
          ) WITHOUT ROWID;",
+        "CREATE TABLE IF NOT EXISTS invite_keys (
+             id INTEGER PRIMARY KEY,
+             name TEXT NOT NULL UNIQUE,
+             secret_hash TEXT NOT NULL UNIQUE,
+             max_uses INTEGER NOT NULL,
+             expires_at INTEGER,
+             account TEXT NOT NULL,
+             used_count INTEGER NOT NULL DEFAULT 0,
+             active INTEGER NOT NULL DEFAULT 0,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );",
     ];
     for (index, migration) in MIGRATIONS.iter().enumerate().skip(current) {
         let version = index + 1;
@@ -673,7 +743,7 @@ fn approve_device_code(
     user_code: &str,
     account_name: &str,
     token_hash: &str,
-) -> rusqlite::Result<Option<String>> {
+) -> rusqlite::Result<Option<ApprovedDevice>> {
     let pending = connection
         .query_row(
             "SELECT device_code_hash FROM device_authorizations
@@ -686,13 +756,63 @@ fn approve_device_code(
         return Ok(None);
     };
 
-    let account_id = create_account_token(connection, account_name, token_hash, "device")?;
+    let account = unique_account_name(connection, account_name)?;
+    let account_id = create_account_token(connection, &account, token_hash, "device")?;
     connection.execute(
         "UPDATE device_authorizations SET status = 'approved', account_id = ?2
          WHERE device_code_hash = ?1",
         params![device_code_hash, account_id],
     )?;
-    Ok(Some(device_code_hash))
+    Ok(Some(ApprovedDevice {
+        device_code_hash,
+        account,
+    }))
+}
+
+struct ApprovedDevice {
+    device_code_hash: String,
+    account: String,
+}
+
+fn create_unique_account_token(
+    connection: &Connection,
+    account_name: &str,
+    token_hash: &str,
+    label: &str,
+) -> rusqlite::Result<String> {
+    let account = unique_account_name(connection, account_name)?;
+    create_account_token(connection, &account, token_hash, label)?;
+    Ok(account)
+}
+
+fn unique_account_name(connection: &Connection, requested: &str) -> rusqlite::Result<String> {
+    if !account_exists(connection, requested) {
+        return Ok(requested.to_string());
+    }
+    const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+    let mut rng = rand::rng();
+    for _ in 0..16 {
+        let suffix: String = (0..4)
+            .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
+            .collect();
+        let candidate = format!("{requested}-{suffix}");
+        if crate::protocol::valid_name(&candidate) && !account_exists(connection, &candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(rusqlite::Error::InvalidParameterName(
+        "could not find a free account name".into(),
+    ))
+}
+
+fn account_exists(connection: &Connection, name: &str) -> bool {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE name = ?1)",
+            [name],
+            |row| row.get(0),
+        )
+        .unwrap_or(false)
 }
 
 fn create_account_token(
@@ -717,6 +837,106 @@ fn create_account_token(
         params![account_id, token_hash, label],
     )?;
     Ok(account_id)
+}
+
+fn sync_invite_keys(connection: &Connection, keys: &[InviteKeyRecord]) -> rusqlite::Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    for key in keys {
+        transaction.execute(
+            "INSERT INTO invite_keys(
+                 name, secret_hash, max_uses, expires_at, account,
+                 active, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 1, unixepoch(), unixepoch())
+             ON CONFLICT(name) DO UPDATE SET
+                 secret_hash = excluded.secret_hash,
+                 max_uses = excluded.max_uses,
+                 expires_at = excluded.expires_at,
+                 account = excluded.account,
+                 active = 1,
+                 updated_at = unixepoch()",
+            params![
+                key.name,
+                key.secret_hash,
+                key.max_uses,
+                key.expires_at,
+                key.account
+            ],
+        )?;
+    }
+    let active: Vec<String> = transaction
+        .prepare("SELECT name FROM invite_keys WHERE active = 1")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for name in active {
+        if !keys.iter().any(|key| key.name == name) {
+            transaction.execute(
+                "UPDATE invite_keys SET active = 0, updated_at = unixepoch() WHERE name = ?1",
+                [&name],
+            )?;
+        }
+    }
+    transaction.commit()
+}
+
+fn consume_invite_key(
+    connection: &Connection,
+    key: &str,
+    token: &str,
+) -> Result<String, InviteKeyError> {
+    let secret_hash = hash_secret(key);
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| InviteKeyError::Store(error.to_string()))?;
+    let row = transaction
+        .query_row(
+            "SELECT account, max_uses, used_count, expires_at, active
+             FROM invite_keys WHERE secret_hash = ?1",
+            [&secret_hash],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, bool>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| InviteKeyError::Store(error.to_string()))?;
+    let Some((account, max_uses, used_count, expires_at, active)) = row else {
+        return Err(InviteKeyError::Unknown);
+    };
+    if !active {
+        return Err(InviteKeyError::Unknown);
+    }
+    if expires_at.is_some_and(|expires| expires <= now_epoch()) {
+        return Err(InviteKeyError::Expired);
+    }
+    if used_count >= max_uses {
+        return Err(InviteKeyError::Exhausted);
+    }
+    let token_hash = hash_secret(token);
+    let account = create_unique_account_token(&transaction, &account, &token_hash, "invite")
+        .map_err(|error| InviteKeyError::Store(error.to_string()))?;
+    transaction
+        .execute(
+            "UPDATE invite_keys SET used_count = used_count + 1, updated_at = unixepoch()
+             WHERE secret_hash = ?1",
+            [&secret_hash],
+        )
+        .map_err(|error| InviteKeyError::Store(error.to_string()))?;
+    transaction
+        .commit()
+        .map_err(|error| InviteKeyError::Store(error.to_string()))?;
+    Ok(account)
+}
+
+fn now_epoch() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn poll_device_code(connection: &Connection, hash: &str) -> rusqlite::Result<DeviceState> {
@@ -788,7 +1008,10 @@ fn open_session(connection: &Connection, endpoint_id: i64) -> rusqlite::Result<i
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceCode, DeviceState, NameClaim, RequestRecord, Store, hash_secret};
+    use super::{
+        DeviceCode, DeviceState, InviteKeyError, InviteKeyRecord, NameClaim, RequestRecord, Store,
+        hash_secret,
+    };
 
     fn database(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("gnar-store-{label}-{}.db", std::process::id()))
@@ -898,6 +1121,97 @@ mod tests {
         assert!(store.account_for_token("wrong").await.unwrap().is_none());
 
         drop(connection);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn duplicate_account_names_get_a_random_four_character_suffix() {
+        let (store, path) = store("suffix").await;
+        let alice_id = sign_in(&store, "alice").await;
+
+        let account = store
+            .enroll_account("alice".into(), "token-alice-2".into())
+            .await
+            .unwrap();
+
+        assert_ne!(account, "alice");
+        assert!(account.starts_with("alice-"));
+        assert_eq!(account.len(), "alice-".len() + 4);
+        let account_id = store
+            .account_for_token("token-alice-2")
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        assert_ne!(account_id, alice_id);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn invite_keys_are_consumed_with_limits_and_expiry() {
+        let (store, path) = store("invite").await;
+        store
+            .sync_invite_keys(vec![InviteKeyRecord {
+                name: "demo".into(),
+                secret_hash: hash_secret("shared-secret"),
+                max_uses: 2,
+                expires_at: None,
+                account: "demo".into(),
+            }])
+            .await
+            .unwrap();
+
+        let first = store
+            .consume_invite_key("shared-secret".into(), "token-demo-1".into())
+            .await
+            .unwrap();
+        let second = store
+            .consume_invite_key("shared-secret".into(), "token-demo-2".into())
+            .await
+            .unwrap();
+        assert_ne!(first, second);
+        assert!(first.starts_with("demo"));
+        assert!(second.starts_with("demo"));
+        assert!(matches!(
+            store
+                .consume_invite_key("shared-secret".into(), "token-demo-3".into())
+                .await,
+            Err(InviteKeyError::Exhausted)
+        ));
+        assert!(
+            store
+                .account_for_token("token-demo-1")
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        store
+            .sync_invite_keys(vec![InviteKeyRecord {
+                name: "demo".into(),
+                secret_hash: hash_secret("shared-secret"),
+                max_uses: 2,
+                expires_at: Some(super::now_epoch() - 1),
+                account: "demo".into(),
+            }])
+            .await
+            .unwrap();
+        assert!(matches!(
+            store
+                .consume_invite_key("shared-secret".into(), "token-demo-4".into())
+                .await,
+            Err(InviteKeyError::Expired)
+        ));
+
+        store.sync_invite_keys(vec![]).await.unwrap();
+        assert!(matches!(
+            store
+                .consume_invite_key("shared-secret".into(), "token-demo-5".into())
+                .await,
+            Err(InviteKeyError::Unknown)
+        ));
+
         let _ = std::fs::remove_file(&path);
     }
 

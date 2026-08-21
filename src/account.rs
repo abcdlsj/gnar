@@ -146,13 +146,52 @@ pub async fn enroll(edge: &str, account: &str, output: &Output) -> Result<(), Ap
     let reply: EnrollmentResponse = response.json().await.map_err(|_| {
         AppError::Edge("edge sent an unexpected enrollment reply; try again".into())
     })?;
-    if reply.status != "enrolled" || reply.token.is_empty() || reply.account != account {
+    if reply.status != "enrolled" || reply.token.is_empty() || reply.account.is_empty() {
         return Err(AppError::Edge(
             "edge sent an incomplete enrollment reply; try again".into(),
         ));
     }
     store_token(edge, &reply.token)?;
-    output.event(Event::EnrollmentSucceeded { account: &account })?;
+    output.event(Event::EnrollmentSucceeded {
+        account: &reply.account,
+    })?;
+    Ok(())
+}
+
+pub async fn enroll_with_invite(
+    edge: &str,
+    invite_key: &str,
+    output: &Output,
+) -> Result<(), AppError> {
+    output.event(Event::InviteEnrollmentStarted)?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| AppError::Edge(error.to_string()))?;
+    let endpoint = edge_endpoint(edge, "/v1/device/enroll")?;
+    let response = client
+        .post(endpoint)
+        .json(&InviteRequest { invite_key })
+        .send()
+        .await
+        .map_err(|error| unreachable_edge(edge, &error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(enrollment_error(status, response).await);
+    }
+
+    let reply: EnrollmentResponse = response.json().await.map_err(|_| {
+        AppError::Edge("edge sent an unexpected enrollment reply; try again".into())
+    })?;
+    if reply.status != "enrolled" || reply.token.is_empty() || reply.account.is_empty() {
+        return Err(AppError::Edge(
+            "edge sent an incomplete enrollment reply; try again".into(),
+        ));
+    }
+    store_token(edge, &reply.token)?;
+    output.event(Event::EnrollmentSucceeded {
+        account: &reply.account,
+    })?;
     Ok(())
 }
 
@@ -301,6 +340,11 @@ struct EnrollmentRequest<'a> {
     enrollment_key: &'a str,
 }
 
+#[derive(Serialize)]
+struct InviteRequest<'a> {
+    invite_key: &'a str,
+}
+
 #[derive(Deserialize)]
 struct EnrollmentResponse {
     status: String,
@@ -320,10 +364,19 @@ async fn enrollment_error(status: reqwest::StatusCode, response: reqwest::Respon
         .and_then(|error| error.code);
     let reason = match (status, code.as_deref()) {
         (reqwest::StatusCode::NOT_FOUND, Some("enrollment_disabled")) => {
-            "enrollment is disabled on this edge; ask its operator to configure an approval secret"
+            "enrollment is disabled on this edge; ask its operator to enable accounts"
         }
         (reqwest::StatusCode::FORBIDDEN, Some("invalid_enrollment_key")) => {
             "the enrollment key was rejected; check the operator-provided key and try again"
+        }
+        (reqwest::StatusCode::FORBIDDEN, Some("invalid_invite_key")) => {
+            "the invite key was not recognized; check the key and try again"
+        }
+        (reqwest::StatusCode::FORBIDDEN, Some("invite_key_expired")) => {
+            "the invite key has expired; ask the edge operator for a new key"
+        }
+        (reqwest::StatusCode::FORBIDDEN, Some("invite_key_exhausted")) => {
+            "the invite key has reached its usage limit; ask the edge operator for a new key"
         }
         (reqwest::StatusCode::BAD_REQUEST, Some("malformed_account")) => {
             "the account name is invalid; use 1 to 48 lowercase letters, numbers, or hyphens"

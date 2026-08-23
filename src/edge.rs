@@ -726,11 +726,14 @@ async fn handle_client_frame(session: &Session, frame: ClientFrame) {
         }
         ClientFrame::WsFrame { id, message } => {
             let sender = session.ws_pending.lock().await.get(&id).cloned();
-            if let Some(sender) = sender
-                && sender.try_send(message).is_err()
-            {
-                session.ws_pending.lock().await.remove(&id);
-                let _ = session.send(EdgeFrame::Cancel { id }).await;
+            if let Some(sender) = sender {
+                let delivered = tokio::time::timeout(FRAME_SEND_TIMEOUT, sender.send(message))
+                    .await
+                    .is_ok_and(|result| result.is_ok());
+                if !delivered {
+                    session.ws_pending.lock().await.remove(&id);
+                    let _ = session.send(EdgeFrame::Cancel { id }).await;
+                }
             }
         }
     }

@@ -407,7 +407,10 @@ async fn handle_edge_frame(state: &mut ForwardState, frame: EdgeFrame) {
             let Some(sender) = state.websockets.get(&id).cloned() else {
                 return;
             };
-            if sender.try_send(message).is_err() {
+            let delivered = tokio::time::timeout(FRAME_SEND_TIMEOUT, sender.send(message))
+                .await
+                .is_ok_and(|result| result.is_ok());
+            if !delivered {
                 if let Some(task) = state.ws_tasks.remove(&id) {
                     task.abort();
                 }

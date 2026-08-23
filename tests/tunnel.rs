@@ -247,6 +247,84 @@ async fn websocket_frames_cross_the_edge_in_both_directions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn websocket_preserves_a_burst_of_mixed_local_frames() {
+    let _guard = TEST_LOCK.lock().await;
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_address = upstream.local_addr().unwrap();
+    let upstream_app = Router::new().route(
+        "/ws",
+        get(|ws: WebSocketUpgrade| async move {
+            ws.on_upgrade(|mut socket| async move {
+                for message in [
+                    AxumMessage::Text("response".into()),
+                    AxumMessage::Text("attached".into()),
+                    AxumMessage::Binary(vec![0, 1, 2, 3].into()),
+                    AxumMessage::Text("synced".into()),
+                ] {
+                    socket.send(message).await.unwrap();
+                }
+                while socket.recv().await.is_some() {}
+            })
+        }),
+    );
+    let upstream_task = tokio::spawn(axum::serve(upstream, upstream_app).into_future());
+
+    let edge_port = free_port();
+    let edge_url = format!("http://127.0.0.1:{edge_port}");
+    let database = temp_database();
+    let binary = env!("CARGO_BIN_EXE_gnar");
+    let edge = Command::new(binary)
+        .args([
+            "serve",
+            "--listen",
+            &format!("127.0.0.1:{edge_port}"),
+            "--public-url",
+            &edge_url,
+            "--database",
+            database.to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut edge = ChildGuard(edge);
+    wait_for_status(&format!("{edge_url}/healthz"), 200).await;
+
+    let target = format!("http://{upstream_address}");
+    let tunnel = Command::new(binary)
+        .args([&target, "--edge", &edge_url, "--name", "mixed-burst"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut tunnel = ChildGuard(tunnel);
+
+    let public_url = format!("ws://127.0.0.1:{edge_port}/t/mixed-burst/ws");
+    let mut socket = wait_for_ws(&public_url).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let expected = [
+        Message::text("response"),
+        Message::text("attached"),
+        Message::binary(vec![0, 1, 2, 3]),
+        Message::text("synced"),
+    ];
+    for expected in expected {
+        let actual = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+    socket.close(None).await.unwrap();
+
+    tunnel.0.kill().unwrap();
+    edge.0.kill().unwrap();
+    upstream_task.abort();
+    let _ = std::fs::remove_file(database);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn websocket_uses_the_protocol_selected_by_the_local_service() {
     let _guard = TEST_LOCK.lock().await;
     let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();

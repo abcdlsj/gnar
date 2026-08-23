@@ -95,7 +95,7 @@ async fn request_crosses_edge_and_is_recorded() {
             .unwrap()
             .to_str()
             .unwrap(),
-        format!("/self-hosted/t/integration/")
+        "/self-hosted/t/integration/".to_string()
     );
 
     let response = reqwest::Client::new()
